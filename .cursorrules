@@ -1,0 +1,29 @@
+# 提交消息规范
+
+所有 Git 提交消息（commit message）**必须使用中文**。
+
+## 格式
+
+```
+<类型>: <简短描述>
+```
+
+## 类型
+
+- `feat`: 新功能
+- `fix`: 修复 bug
+- `docs`: 文档
+- `style`: 格式（不影响逻辑）
+- `refactor`: 重构
+- `test`: 测试
+- `chore`: 构建/工具/依赖
+
+## 示例
+
+```
+feat: 添加拍卖列表分页接口
+fix: 修复用户登录时 JWT 过期处理
+docs: 更新 ARCHITECTURE 架构说明
+refactor: 抽离区块链合约调用逻辑
+chore: 完善 .gitignore 配置
+```

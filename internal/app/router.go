@@ -1,0 +1,80 @@
+package app
+
+import (
+	"os"
+
+	"github.com/gin-gonic/gin"
+
+	"nft-auction-api/internal/config"
+	"nft-auction-api/internal/handler"
+	"nft-auction-api/internal/logger"
+	"nft-auction-api/internal/middleware"
+	"nft-auction-api/internal/service"
+)
+
+func SetupRouter(
+	userService *service.UserService,
+	auctionService *service.AuctionService,
+	bidService *service.BidService,
+	nftService *service.NFTService,
+	appConfig *config.AppConfig,
+	appLogger *logger.Logger,
+) *gin.Engine {
+	if os.Getenv("APP_ENV") == "production" {
+		gin.SetMode(gin.ReleaseMode)
+	}
+
+	r := gin.New()
+	r.Use(gin.Recovery())
+	r.Use(middleware.CORSMiddleware())
+
+	secretKey := os.Getenv("JWT_SECRET_KEY")
+	if secretKey == "" {
+		secretKey = "nft-auction-secret-key-change-in-production"
+	}
+	jwtService := service.NewJWTService(secretKey)
+	authMiddleware := middleware.NewAuthMiddleware(secretKey)
+
+	userHandler := handler.NewUserHandler(userService, jwtService, appLogger)
+	auctionHandler := handler.NewAuctionHandler(auctionService, bidService, nftService, appLogger)
+	nftHandler := handler.NewNFTHandler(nftService, appLogger)
+
+	r.GET("/health", func(c *gin.Context) {
+		c.JSON(200, gin.H{"status": "ok"})
+	})
+
+	r.GET("/ping", func(c *gin.Context) {
+		c.JSON(200, gin.H{"message": "pong"})
+	})
+
+	api := r.Group("/api")
+	{
+		auth := api.Group("/auth")
+		{
+			auth.POST("/register", userHandler.Register)
+			auth.POST("/login", userHandler.Login)
+			auth.POST("/logout", authMiddleware.JWTAuth(), userHandler.Logout)
+		}
+
+		users := api.Group("/users")
+		{
+			users.GET("/me", authMiddleware.JWTAuth(), userHandler.GetProfile)
+			users.GET("/:address/auctions", auctionHandler.ListByAddress)
+		}
+
+		auctions := api.Group("/auctions")
+		{
+			auctions.GET("", auctionHandler.List)
+			auctions.GET("/:id", auctionHandler.GetByID)
+			auctions.GET("/:id/bids", auctionHandler.ListBids)
+			auctions.POST("", authMiddleware.JWTAuth(), auctionHandler.Create)
+		}
+
+		nfts := api.Group("/nfts")
+		{
+			nfts.GET("/:contract/:tokenId", nftHandler.GetMetadata)
+		}
+	}
+
+	return r
+}
