@@ -79,7 +79,7 @@ func (h *AuctionHandler) GetByID(c *gin.Context) {
 	}
 
 	var nft *model.NFTMetadata
-	nft, _ = h.nftService.GetMetadata(auction.NFTContract, auction.TokenID)
+	nft, _ = h.nftService.GetOrFetchMetadata(c.Request.Context(), auction.NFTContract, auction.TokenID)
 
 	response.Success(c, auctionDetailResponse(auction, highestBid, bids, nft))
 }

@@ -1,0 +1,114 @@
+package blockchain
+
+import (
+	"context"
+	"math/big"
+	"strings"
+
+	"github.com/ethereum/go-ethereum"
+	"github.com/ethereum/go-ethereum/accounts/abi"
+	"github.com/ethereum/go-ethereum/common"
+)
+
+// ERC721 / NFTMarketplace 的 ABI 片段（tokenURI + totalSupply + nextTokenId）
+const erc721TokenURIABI = `[
+  {"inputs":[{"internalType":"uint256","name":"tokenId","type":"uint256"}],"name":"tokenURI","outputs":[{"internalType":"string","name":"","type":"string"}],"stateMutability":"view","type":"function"},
+  {"inputs":[],"name":"totalSupply","outputs":[{"internalType":"uint256","name":"","type":"uint256"}],"stateMutability":"view","type":"function"},
+  {"inputs":[],"name":"nextTokenId","outputs":[{"internalType":"uint256","name":"","type":"uint256"}],"stateMutability":"view","type":"function"}
+]`
+
+// NFTContract 用于调用任意 ERC721 的 tokenURI
+type NFTContract struct {
+	client  *Client
+	abi     abi.ABI
+}
+
+// NewNFTContract 创建 NFT 合约调用封装，client 可为 nil
+func NewNFTContract(client *Client) (*NFTContract, error) {
+	if client == nil || !client.IsAvailable() {
+		return nil, nil
+	}
+	parsed, err := abi.JSON(strings.NewReader(erc721TokenURIABI))
+	if err != nil {
+		return nil, err
+	}
+	return &NFTContract{client: client, abi: parsed}, nil
+}
+
+// TokenURI 调用指定 ERC721 合约的 tokenURI(tokenId)，返回元数据 URI
+func (c *NFTContract) TokenURI(ctx context.Context, contractAddress string, tokenID uint64) (string, error) {
+	if c == nil || c.client == nil {
+		return "", nil
+	}
+	addr := common.HexToAddress(contractAddress)
+	data, err := c.abi.Pack("tokenURI", new(big.Int).SetUint64(tokenID))
+	if err != nil {
+		return "", err
+	}
+	result, err := c.client.CallContract(ctx, ethereum.CallMsg{
+		To:   &addr,
+		Data: data,
+	}, nil)
+	if err != nil {
+		return "", err
+	}
+	var uri string
+	if err := c.abi.UnpackIntoInterface(&uri, "tokenURI", result); err != nil {
+		return "", err
+	}
+	return uri, nil
+}
+
+// TotalSupply 调用 NFT 合约的 totalSupply()，返回已铸造数量
+func (c *NFTContract) TotalSupply(ctx context.Context, contractAddress string) (uint64, error) {
+	if c == nil || c.client == nil || contractAddress == "" {
+		return 0, nil
+	}
+	addr := common.HexToAddress(contractAddress)
+	data, err := c.abi.Pack("totalSupply")
+	if err != nil {
+		return 0, err
+	}
+	result, err := c.client.CallContract(ctx, ethereum.CallMsg{
+		To:   &addr,
+		Data: data,
+	}, nil)
+	if err != nil {
+		return 0, err
+	}
+	var n *big.Int
+	if err := c.abi.UnpackIntoInterface(&n, "totalSupply", result); err != nil {
+		return 0, err
+	}
+	if n == nil || !n.IsUint64() {
+		return 0, nil
+	}
+	return n.Uint64(), nil
+}
+
+// NextTokenId 调用 NFTMarketplace 的 nextTokenId()，返回下一个将铸造的 token ID
+func (c *NFTContract) NextTokenId(ctx context.Context, contractAddress string) (uint64, error) {
+	if c == nil || c.client == nil || contractAddress == "" {
+		return 0, nil
+	}
+	addr := common.HexToAddress(contractAddress)
+	data, err := c.abi.Pack("nextTokenId")
+	if err != nil {
+		return 0, err
+	}
+	result, err := c.client.CallContract(ctx, ethereum.CallMsg{
+		To:   &addr,
+		Data: data,
+	}, nil)
+	if err != nil {
+		return 0, err
+	}
+	var n *big.Int
+	if err := c.abi.UnpackIntoInterface(&n, "nextTokenId", result); err != nil {
+		return 0, err
+	}
+	if n == nil || !n.IsUint64() {
+		return 0, nil
+	}
+	return n.Uint64(), nil
+}

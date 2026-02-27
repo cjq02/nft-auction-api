@@ -34,7 +34,7 @@ func (h *NFTHandler) GetMetadata(c *gin.Context) {
 		return
 	}
 
-	metadata, err := h.nftService.GetMetadata(contract, tokenID)
+	metadata, err := h.nftService.GetOrFetchMetadata(c.Request.Context(), contract, tokenID)
 	if err != nil {
 		response.HandleError(c, h.logger, err)
 		return

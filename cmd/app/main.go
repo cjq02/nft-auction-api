@@ -12,6 +12,7 @@ import (
 	"nft-auction-api/internal/blockchain"
 	"nft-auction-api/internal/config"
 	"nft-auction-api/internal/logger"
+	"nft-auction-api/internal/metadata"
 	"nft-auction-api/internal/model"
 	"nft-auction-api/internal/service"
 )
@@ -53,23 +54,32 @@ func main() {
 	appConfig := config.NewAppConfig(appLogger)
 	bcConfig := config.NewBlockchainConfig()
 
+	var bcClient *blockchain.Client
 	var auctionContract *blockchain.AuctionContract
-	if bcConfig.RPCURL != "" && bcConfig.AuctionContractAddress != "" {
-		bcClient, err := blockchain.NewClient(bcConfig.RPCURL)
+	var nftContract *blockchain.NFTContract
+
+	if bcConfig.RPCURL != "" {
+		var err error
+		bcClient, err = blockchain.NewClient(bcConfig.RPCURL)
 		if err != nil {
 			log.Printf("Warning: Blockchain client init failed: %v, continuing without chain reads", err)
 		} else if bcClient != nil {
 			defer bcClient.Close()
-			auctionContract, _ = blockchain.NewAuctionContract(bcClient, bcConfig.AuctionContractAddress)
+			if bcConfig.AuctionContractAddress != "" {
+				auctionContract, _ = blockchain.NewAuctionContract(bcClient, bcConfig.AuctionContractAddress)
+			}
+			nftContract, _ = blockchain.NewNFTContract(bcClient)
 		}
 	}
+
+	metadataFetcher := metadata.NewFetcher(bcConfig.IPFSGateway)
 
 	userService := service.NewUserService(db.DB)
 	auctionService := service.NewAuctionService(db.DB, auctionContract)
 	bidService := service.NewBidService(db.DB)
-	nftService := service.NewNFTService(db.DB)
+	nftService := service.NewNFTService(db.DB, nftContract, metadataFetcher)
 
-	r := app.SetupRouter(userService, auctionService, bidService, nftService, appConfig, appLogger)
+	r := app.SetupRouter(userService, auctionService, bidService, nftService, nftContract, bcConfig.NFTContractAddress, appConfig, appLogger)
 
 	port := os.Getenv("APP_PORT")
 	if port == "" {

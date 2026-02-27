@@ -23,6 +23,20 @@ func NewAuctionService(db *gorm.DB, auctionContract *blockchain.AuctionContract)
 	}
 }
 
+// Counts 返回拍卖总数、进行中、已结束数量（用于数据概览）
+func (s *AuctionService) Counts() (total, active, ended int64, err error) {
+	if err = s.db.Model(&model.AuctionIndex{}).Count(&total).Error; err != nil {
+		return 0, 0, 0, errors.NewDatabaseError(err)
+	}
+	if err = s.db.Model(&model.AuctionIndex{}).Where("status = ?", model.AuctionStatusActive).Count(&active).Error; err != nil {
+		return 0, 0, 0, errors.NewDatabaseError(err)
+	}
+	if err = s.db.Model(&model.AuctionIndex{}).Where("status = ?", model.AuctionStatusEnded).Count(&ended).Error; err != nil {
+		return 0, 0, 0, errors.NewDatabaseError(err)
+	}
+	return total, active, ended, nil
+}
+
 func (s *AuctionService) List(page, limit int, status string) ([]model.AuctionIndex, int64, error) {
 	var items []model.AuctionIndex
 	var total int64
