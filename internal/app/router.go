@@ -81,6 +81,12 @@ func SetupRouter(
 		}
 
 		api.GET("/overview", overviewHandler.GetOverview)
+
+		// 管理员补录：将链上历史拍卖同步到数据库
+		admin := api.Group("/admin")
+		{
+			admin.POST("/backfill-auctions", auctionHandler.Backfill)
+		}
 	}
 
 	return r

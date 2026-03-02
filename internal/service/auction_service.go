@@ -148,13 +148,66 @@ func (s *AuctionService) UpdateStatus(auctionID uint64, status model.AuctionStat
 	return s.db.Model(&model.AuctionIndex{}).Where("auction_id = ?", auctionID).Update("status", status).Error
 }
 
-func (s *AuctionService) PrepareCreateParams(req *model.CreateAuctionRequest) map[string]interface{} {
-	return map[string]interface{}{
-		"nftContract":  req.NFTContract,
-		"tokenId":     req.TokenID,
-		"duration":    req.Duration,
-		"minBidUSD":   req.MinBidUSD,
-		"paymentToken": req.PaymentToken,
+// BackfillFromChain 扫描链上所有历史 AuctionCreated 事件，将 DB 中缺失的拍卖补录进来。
+// 返回本次新增的拍卖数量。
+func (s *AuctionService) BackfillFromChain(ctx context.Context) (int, error) {
+	if s.auctionContract == nil {
+		return 0, errors.NewBlockchainError("拍卖合约未配置", nil)
 	}
+
+	ids, err := s.auctionContract.ScanAuctionIDs(ctx)
+	if err != nil {
+		return 0, errors.NewBlockchainError("扫描链上事件失败", err)
+	}
+
+	added := 0
+	for _, auctionID := range ids {
+		var existing model.AuctionIndex
+		if dbErr := s.db.Where("auction_id = ?", auctionID).First(&existing).Error; dbErr == nil {
+			continue // 已存在，跳过
+		}
+
+		chainInfo, chainErr := s.auctionContract.GetAuction(ctx, auctionID)
+		if chainErr != nil || chainInfo == nil {
+			continue
+		}
+
+		item := s.chainInfoToIndex(auctionID, chainInfo)
+		if createErr := s.db.Create(item).Error; createErr == nil {
+			added++
+		}
+	}
+
+	return added, nil
+}
+
+// IndexFromTxHash 从 txHash 解析 AuctionCreated 事件，向链上查询完整数据后写入数据库（幂等）
+func (s *AuctionService) IndexFromTxHash(ctx context.Context, txHash string) (*model.AuctionIndex, error) {
+	if s.auctionContract == nil {
+		return nil, errors.NewBlockchainError("拍卖合约未配置", nil)
+	}
+
+	auctionID, err := s.auctionContract.ParseAuctionCreatedFromReceipt(ctx, txHash)
+	if err != nil {
+		return nil, errors.NewBlockchainError("解析交易事件失败", err)
+	}
+
+	// 幂等：若已存在则直接返回
+	var existing model.AuctionIndex
+	if dbErr := s.db.Where("auction_id = ?", auctionID).First(&existing).Error; dbErr == nil {
+		return &existing, nil
+	}
+
+	chainInfo, err := s.auctionContract.GetAuction(ctx, auctionID)
+	if err != nil || chainInfo == nil {
+		return nil, errors.NewBlockchainError("从链上获取拍卖信息失败", err)
+	}
+
+	item := s.chainInfoToIndex(auctionID, chainInfo)
+	if createErr := s.db.Create(item).Error; createErr != nil {
+		return nil, errors.NewDatabaseError(createErr)
+	}
+
+	return item, nil
 }
 

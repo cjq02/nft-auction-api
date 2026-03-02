@@ -155,11 +155,23 @@ func (h *AuctionHandler) Create(c *gin.Context) {
 		return
 	}
 
-	params := h.auctionService.PrepareCreateParams(&req)
-	response.Success(c, gin.H{
-		"message": "请使用钱包调用合约 createAuction 完成创建，以下为调用参数",
-		"params":  params,
-	})
+	item, err := h.auctionService.IndexFromTxHash(c.Request.Context(), req.TxHash)
+	if err != nil {
+		response.HandleError(c, h.logger, err)
+		return
+	}
+
+	response.Success(c, auctionToResponse(item, nil, nil))
+}
+
+func (h *AuctionHandler) Backfill(c *gin.Context) {
+	added, err := h.auctionService.BackfillFromChain(c.Request.Context())
+	if err != nil {
+		response.HandleError(c, h.logger, err)
+		return
+	}
+
+	response.Success(c, gin.H{"added": added})
 }
 
 func auctionToResponse(a *model.AuctionIndex, highestBid *model.BidIndex, nft *model.NFTMetadata) gin.H {

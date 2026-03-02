@@ -31,10 +31,7 @@ func (AuctionIndex) TableName() string {
 	return "t_auction_index"
 }
 
+// CreateAuctionRequest 前端交易上链确认后上报 txHash，后端自行从链上读取数据写库
 type CreateAuctionRequest struct {
-	NFTContract  string  `json:"nftContract" binding:"required"`
-	TokenID      uint64  `json:"tokenId" binding:"required"`
-	Duration     uint64  `json:"duration" binding:"required,min=60"`
-	MinBidUSD    string  `json:"minBidUSD" binding:"required"`
-	PaymentToken *string `json:"paymentToken"`
+	TxHash string `json:"txHash" binding:"required"`
 }
