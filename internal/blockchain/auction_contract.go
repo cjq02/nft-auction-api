@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"log"
 	"math/big"
 	"time"
 
@@ -72,6 +73,9 @@ func NewAuctionContract(client *Client, contractAddress string) (*AuctionContrac
 	}, nil
 }
 
+// getAuctionResultLen  getAuction 返回一个 tuple，8 个槽位各 32 字节
+const getAuctionResultLen = 8 * 32
+
 func (c *AuctionContract) GetAuction(ctx context.Context, auctionID uint64) (*AuctionInfo, error) {
 	if c == nil || c.client == nil {
 		return nil, nil
@@ -89,44 +93,57 @@ func (c *AuctionContract) GetAuction(ctx context.Context, auctionID uint64) (*Au
 	if err != nil {
 		return nil, err
 	}
-
-	var info AuctionInfo
-	err = c.contract.abi.UnpackIntoInterface(&info, "getAuction", result)
-	if err != nil {
-		return nil, err
+	if len(result) < getAuctionResultLen {
+		return nil, fmt.Errorf("getAuction result too short: got %d bytes", len(result))
 	}
 
-	return &info, nil
+	// 手动解析 tuple(seller, nftContract, tokenId, startTime, endTime, minBid, paymentToken, status)
+	// 避免 UnpackIntoInterface 对单输出 tuple 的 reflect 问题
+	info := &AuctionInfo{
+		Seller:       common.BytesToAddress(result[0:32][12:32]),
+		NFTContract:  common.BytesToAddress(result[32:64][12:32]),
+		TokenID:      new(big.Int).SetBytes(result[64:96]),
+		StartTime:    new(big.Int).SetBytes(result[96:128]),
+		EndTime:      new(big.Int).SetBytes(result[128:160]),
+		MinBid:       new(big.Int).SetBytes(result[160:192]),
+		PaymentToken: common.BytesToAddress(result[192:224][12:32]),
+		Status:       uint8(result[255]), // 第 8 槽位 uint8 右对齐
+	}
+	return info, nil
 }
 
 // ParseAuctionCreatedFromReceipt fetches the transaction receipt by txHash and parses the
 // AuctionCreated event to extract the auctionId.
 func (c *AuctionContract) ParseAuctionCreatedFromReceipt(ctx context.Context, txHash string) (uint64, error) {
 	if c == nil || c.client == nil {
+		log.Printf("[auction_contract] ParseAuctionCreatedFromReceipt: blockchain client not available")
 		return 0, fmt.Errorf("blockchain client not available")
 	}
 
 	receipt, err := c.client.TransactionReceipt(ctx, common.HexToHash(txHash))
 	if err != nil {
+		log.Printf("[auction_contract] ParseAuctionCreatedFromReceipt txHash=%s get_receipt_err=%v", txHash, err)
 		return 0, fmt.Errorf("failed to get transaction receipt: %w", err)
 	}
+	log.Printf("[auction_contract] ParseAuctionCreatedFromReceipt txHash=%s receipt_status=%d logs_count=%d contract=%s", txHash, receipt.Status, len(receipt.Logs), c.address.Hex())
 
-	for _, log := range receipt.Logs {
-		// Must be from the auction contract and have at least one topic
-		if log.Address != c.address || len(log.Topics) == 0 {
+	for _, l := range receipt.Logs {
+		if l.Address != c.address || len(l.Topics) == 0 {
 			continue
 		}
-		if log.Topics[0] != auctionCreatedTopic {
+		if l.Topics[0] != auctionCreatedTopic {
 			continue
 		}
-		// auctionId is the first indexed parameter (Topics[1])
-		if len(log.Topics) < 2 {
+		if len(l.Topics) < 2 {
+			log.Printf("[auction_contract] ParseAuctionCreatedFromReceipt txHash=%s AuctionCreated log missing auctionId topic", txHash)
 			return 0, fmt.Errorf("AuctionCreated log missing auctionId topic")
 		}
-		auctionID := new(big.Int).SetBytes(log.Topics[1].Bytes()).Uint64()
+		auctionID := new(big.Int).SetBytes(l.Topics[1].Bytes()).Uint64()
+		log.Printf("[auction_contract] ParseAuctionCreatedFromReceipt txHash=%s found auctionId=%d", txHash, auctionID)
 		return auctionID, nil
 	}
 
+	log.Printf("[auction_contract] ParseAuctionCreatedFromReceipt txHash=%s AuctionCreated event not found (logs=%d, contract=%s)", txHash, len(receipt.Logs), c.address.Hex())
 	return 0, fmt.Errorf("AuctionCreated event not found in transaction %s", txHash)
 }
 
@@ -140,23 +157,28 @@ const scanChunkDelay = 400 * time.Millisecond
 // 用于历史数据补录。fromBlock 为 0 时从创世块开始；可设 AUCTION_DEPLOY_BLOCK 减少扫描量。
 func (c *AuctionContract) ScanAuctionIDs(ctx context.Context, fromBlockStart uint64) ([]uint64, error) {
 	if c == nil || c.client == nil {
+		log.Printf("[auction_contract] ScanAuctionIDs: blockchain client not available")
 		return nil, fmt.Errorf("blockchain client not available")
 	}
 
 	toBlock, err := c.client.BlockNumber(ctx)
 	if err != nil {
+		log.Printf("[auction_contract] ScanAuctionIDs get_block_number_err=%v", err)
 		return nil, fmt.Errorf("failed to get block number: %w", err)
 	}
+	log.Printf("[auction_contract] ScanAuctionIDs start fromBlock=%d toBlock=%d contract=%s", fromBlockStart, toBlock, c.address.Hex())
 
 	fromBlock := fromBlockStart
 	var ids []uint64
 	seen := make(map[uint64]bool)
+	chunkNum := 0
 
 	for fromBlock <= toBlock {
 		chunkEnd := fromBlock + scanBlockChunkSize - 1
 		if chunkEnd > toBlock {
 			chunkEnd = toBlock
 		}
+		chunkNum++
 
 		query := ethereum.FilterQuery{
 			FromBlock: new(big.Int).SetUint64(fromBlock),
@@ -167,20 +189,22 @@ func (c *AuctionContract) ScanAuctionIDs(ctx context.Context, fromBlockStart uin
 
 		logs, err := c.client.FilterLogs(ctx, query)
 		if err != nil {
+			log.Printf("[auction_contract] ScanAuctionIDs filter_logs_failed chunk=%d blocks=%d-%d err=%v", chunkNum, fromBlock, chunkEnd, err)
 			return nil, fmt.Errorf("failed to filter logs (blocks %d-%d): %w", fromBlock, chunkEnd, err)
 		}
-
-		for _, log := range logs {
-			if err := c.parseAuctionCreatedLog(log, &ids, seen); err != nil {
+		for _, l := range logs {
+			if err := c.parseAuctionCreatedLog(l, &ids, seen); err != nil {
 				continue
 			}
+		}
+		if len(logs) > 0 {
+			log.Printf("[auction_contract] ScanAuctionIDs chunk=%d blocks=%d-%d logs=%d total_ids=%d", chunkNum, fromBlock, chunkEnd, len(logs), len(ids))
 		}
 
 		fromBlock = chunkEnd + 1
 		if chunkEnd >= toBlock {
 			break
 		}
-		// 避免 RPC 限流（如 Infura 429）
 		select {
 		case <-ctx.Done():
 			return nil, ctx.Err()
@@ -188,6 +212,7 @@ func (c *AuctionContract) ScanAuctionIDs(ctx context.Context, fromBlockStart uin
 		}
 	}
 
+	log.Printf("[auction_contract] ScanAuctionIDs done fromBlock=%d toBlock=%d chunks=%d total_ids=%d", fromBlockStart, toBlock, chunkNum, len(ids))
 	return ids, nil
 }
 

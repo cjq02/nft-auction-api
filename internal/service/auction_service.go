@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"log"
 
 	"nft-auction-api/internal/blockchain"
 	"nft-auction-api/internal/errors"
@@ -157,14 +158,18 @@ type BackfillResult struct {
 // BackfillFromChain 扫描链上所有历史 AuctionCreated 事件，将 DB 中缺失的拍卖补录进来。
 // startBlock 为 0 时从创世块扫；可设 AUCTION_DEPLOY_BLOCK 减少扫描量、避免限流。
 func (s *AuctionService) BackfillFromChain(ctx context.Context, startBlock uint64) (*BackfillResult, error) {
+	log.Printf("[auction_sync] BackfillFromChain start startBlock=%d", startBlock)
 	if s.auctionContract == nil {
+		log.Printf("[auction_sync] BackfillFromChain error: auction contract not configured")
 		return nil, errors.NewBlockchainError("拍卖合约未配置", nil)
 	}
 
 	ids, err := s.auctionContract.ScanAuctionIDs(ctx, startBlock)
 	if err != nil {
+		log.Printf("[auction_sync] BackfillFromChain scan_failed startBlock=%d err=%v", startBlock, err)
 		return nil, errors.NewBlockchainError("扫描链上事件失败: "+err.Error(), err)
 	}
+	log.Printf("[auction_sync] BackfillFromChain scan_done startBlock=%d foundOnChain=%d", startBlock, len(ids))
 
 	result := &BackfillResult{FoundOnChain: len(ids)}
 	for _, auctionID := range ids {
@@ -175,45 +180,57 @@ func (s *AuctionService) BackfillFromChain(ctx context.Context, startBlock uint6
 
 		chainInfo, chainErr := s.auctionContract.GetAuction(ctx, auctionID)
 		if chainErr != nil || chainInfo == nil {
+			log.Printf("[auction_sync] BackfillFromChain skip_auction auctionId=%d get_auction_err=%v", auctionID, chainErr)
 			continue
 		}
 
 		item := s.chainInfoToIndex(auctionID, chainInfo)
 		if createErr := s.db.Create(item).Error; createErr == nil {
 			result.Added++
+			log.Printf("[auction_sync] BackfillFromChain added auctionId=%d", auctionID)
+		} else {
+			log.Printf("[auction_sync] BackfillFromChain db_create_failed auctionId=%d err=%v", auctionID, createErr)
 		}
 	}
-
+	log.Printf("[auction_sync] BackfillFromChain done startBlock=%d foundOnChain=%d added=%d", startBlock, result.FoundOnChain, result.Added)
 	return result, nil
 }
 
 // IndexFromTxHash 从 txHash 解析 AuctionCreated 事件，向链上查询完整数据后写入数据库（幂等）
 func (s *AuctionService) IndexFromTxHash(ctx context.Context, txHash string) (*model.AuctionIndex, error) {
+	log.Printf("[auction_sync] IndexFromTxHash start txHash=%s", txHash)
 	if s.auctionContract == nil {
+		log.Printf("[auction_sync] IndexFromTxHash error: auction contract not configured")
 		return nil, errors.NewBlockchainError("拍卖合约未配置", nil)
 	}
 
 	auctionID, err := s.auctionContract.ParseAuctionCreatedFromReceipt(ctx, txHash)
 	if err != nil {
+		log.Printf("[auction_sync] IndexFromTxHash parse_failed txHash=%s err=%v", txHash, err)
 		return nil, errors.NewBlockchainError("解析交易事件失败", err)
 	}
+	log.Printf("[auction_sync] IndexFromTxHash parsed auctionId=%d", auctionID)
 
 	// 幂等：若已存在则直接返回
 	var existing model.AuctionIndex
 	if dbErr := s.db.Where("auction_id = ?", auctionID).First(&existing).Error; dbErr == nil {
+		log.Printf("[auction_sync] IndexFromTxHash already_exists auctionId=%d (skipped DB insert)", auctionID)
 		return &existing, nil
 	}
 
 	chainInfo, err := s.auctionContract.GetAuction(ctx, auctionID)
 	if err != nil || chainInfo == nil {
+		log.Printf("[auction_sync] IndexFromTxHash get_auction_failed auctionId=%d err=%v", auctionID, err)
 		return nil, errors.NewBlockchainError("从链上获取拍卖信息失败", err)
 	}
+	log.Printf("[auction_sync] IndexFromTxHash chain_info_ok auctionId=%d seller=%s", auctionID, chainInfo.Seller.Hex())
 
 	item := s.chainInfoToIndex(auctionID, chainInfo)
 	if createErr := s.db.Create(item).Error; createErr != nil {
+		log.Printf("[auction_sync] IndexFromTxHash db_create_failed auctionId=%d err=%v", auctionID, createErr)
 		return nil, errors.NewDatabaseError(createErr)
 	}
-
+	log.Printf("[auction_sync] IndexFromTxHash db_created auctionId=%d id=%d", auctionID, item.ID)
 	return item, nil
 }
 

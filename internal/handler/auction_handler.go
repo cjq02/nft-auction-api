@@ -43,8 +43,12 @@ func (h *AuctionHandler) List(c *gin.Context) {
 
 	items, total, err := h.auctionService.List(page, limit, status)
 	if err != nil {
+		h.logger.Error("auction_list failed page=%d limit=%d status=%s err=%v", page, limit, status, err)
 		response.HandleError(c, h.logger, err)
 		return
+	}
+	if total == 0 {
+		h.logger.Info("auction_list empty page=%d limit=%d status=%s (DB has no matching records)", page, limit, status)
 	}
 
 	// 简化列表响应，不包含 bid 和 nft（减少查询）
@@ -153,27 +157,32 @@ func (h *AuctionHandler) ListBids(c *gin.Context) {
 func (h *AuctionHandler) Create(c *gin.Context) {
 	var req model.CreateAuctionRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
+		h.logger.Warn("auction_create bind_failed err=%v", err)
 		appErr := errors.NewValidationError("请求参数无效: " + err.Error())
 		response.HandleError(c, h.logger, appErr)
 		return
 	}
+	h.logger.Info("auction_create request txHash=%s", req.TxHash)
 
 	item, err := h.auctionService.IndexFromTxHash(c.Request.Context(), req.TxHash)
 	if err != nil {
+		h.logger.Error("auction_create failed txHash=%s err=%v", req.TxHash, err)
 		response.HandleError(c, h.logger, err)
 		return
 	}
-
+	h.logger.Info("auction_create ok txHash=%s auctionId=%d", req.TxHash, item.AuctionID)
 	response.Success(c, auctionToResponse(item, nil, nil))
 }
 
 func (h *AuctionHandler) Backfill(c *gin.Context) {
+	h.logger.Info("backfill start startBlock=%d", h.backfillStartBlock)
 	result, err := h.auctionService.BackfillFromChain(c.Request.Context(), h.backfillStartBlock)
 	if err != nil {
+		h.logger.Error("backfill failed startBlock=%d err=%v", h.backfillStartBlock, err)
 		response.HandleError(c, h.logger, err)
 		return
 	}
-
+	h.logger.Info("backfill done startBlock=%d foundOnChain=%d added=%d", h.backfillStartBlock, result.FoundOnChain, result.Added)
 	response.Success(c, gin.H{
 		"foundOnChain": result.FoundOnChain,
 		"added":        result.Added,
