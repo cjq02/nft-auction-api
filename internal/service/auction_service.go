@@ -148,19 +148,25 @@ func (s *AuctionService) UpdateStatus(auctionID uint64, status model.AuctionStat
 	return s.db.Model(&model.AuctionIndex{}).Where("auction_id = ?", auctionID).Update("status", status).Error
 }
 
+// BackfillResult 补录结果
+type BackfillResult struct {
+	FoundOnChain int // 链上扫描到的 AuctionCreated 数量
+	Added        int // 本次新写入 DB 的数量
+}
+
 // BackfillFromChain 扫描链上所有历史 AuctionCreated 事件，将 DB 中缺失的拍卖补录进来。
-// 返回本次新增的拍卖数量。
-func (s *AuctionService) BackfillFromChain(ctx context.Context) (int, error) {
+// startBlock 为 0 时从创世块扫；可设 AUCTION_DEPLOY_BLOCK 减少扫描量、避免限流。
+func (s *AuctionService) BackfillFromChain(ctx context.Context, startBlock uint64) (*BackfillResult, error) {
 	if s.auctionContract == nil {
-		return 0, errors.NewBlockchainError("拍卖合约未配置", nil)
+		return nil, errors.NewBlockchainError("拍卖合约未配置", nil)
 	}
 
-	ids, err := s.auctionContract.ScanAuctionIDs(ctx)
+	ids, err := s.auctionContract.ScanAuctionIDs(ctx, startBlock)
 	if err != nil {
-		return 0, errors.NewBlockchainError("扫描链上事件失败", err)
+		return nil, errors.NewBlockchainError("扫描链上事件失败: "+err.Error(), err)
 	}
 
-	added := 0
+	result := &BackfillResult{FoundOnChain: len(ids)}
 	for _, auctionID := range ids {
 		var existing model.AuctionIndex
 		if dbErr := s.db.Where("auction_id = ?", auctionID).First(&existing).Error; dbErr == nil {
@@ -174,11 +180,11 @@ func (s *AuctionService) BackfillFromChain(ctx context.Context) (int, error) {
 
 		item := s.chainInfoToIndex(auctionID, chainInfo)
 		if createErr := s.db.Create(item).Error; createErr == nil {
-			added++
+			result.Added++
 		}
 	}
 
-	return added, nil
+	return result, nil
 }
 
 // IndexFromTxHash 从 txHash 解析 AuctionCreated 事件，向链上查询完整数据后写入数据库（幂等）

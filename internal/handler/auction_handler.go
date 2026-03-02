@@ -13,23 +13,26 @@ import (
 )
 
 type AuctionHandler struct {
-	auctionService *service.AuctionService
-	bidService     *service.BidService
-	nftService     *service.NFTService
-	logger         *logger.Logger
+	auctionService      *service.AuctionService
+	bidService          *service.BidService
+	nftService          *service.NFTService
+	backfillStartBlock  uint64
+	logger              *logger.Logger
 }
 
 func NewAuctionHandler(
 	auctionService *service.AuctionService,
 	bidService *service.BidService,
 	nftService *service.NFTService,
+	backfillStartBlock uint64,
 	appLogger *logger.Logger,
 ) *AuctionHandler {
 	return &AuctionHandler{
-		auctionService: auctionService,
-		bidService:     bidService,
-		nftService:     nftService,
-		logger:         appLogger,
+		auctionService:     auctionService,
+		bidService:         bidService,
+		nftService:         nftService,
+		backfillStartBlock: backfillStartBlock,
+		logger:             appLogger,
 	}
 }
 
@@ -165,13 +168,16 @@ func (h *AuctionHandler) Create(c *gin.Context) {
 }
 
 func (h *AuctionHandler) Backfill(c *gin.Context) {
-	added, err := h.auctionService.BackfillFromChain(c.Request.Context())
+	result, err := h.auctionService.BackfillFromChain(c.Request.Context(), h.backfillStartBlock)
 	if err != nil {
 		response.HandleError(c, h.logger, err)
 		return
 	}
 
-	response.Success(c, gin.H{"added": added})
+	response.Success(c, gin.H{
+		"foundOnChain": result.FoundOnChain,
+		"added":        result.Added,
+	})
 }
 
 func auctionToResponse(a *model.AuctionIndex, highestBid *model.BidIndex, nft *model.NFTMetadata) gin.H {

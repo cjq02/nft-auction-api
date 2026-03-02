@@ -20,6 +20,7 @@ func SetupRouter(
 	nftService *service.NFTService,
 	nftContract *blockchain.NFTContract,
 	nftContractAddress string,
+	backfillStartBlock uint64,
 	appConfig *config.AppConfig,
 	appLogger *logger.Logger,
 ) *gin.Engine {
@@ -39,7 +40,7 @@ func SetupRouter(
 	authMiddleware := middleware.NewAuthMiddleware(secretKey)
 
 	userHandler := handler.NewUserHandler(userService, jwtService, appLogger)
-	auctionHandler := handler.NewAuctionHandler(auctionService, bidService, nftService, appLogger)
+	auctionHandler := handler.NewAuctionHandler(auctionService, bidService, nftService, backfillStartBlock, appLogger)
 	nftHandler := handler.NewNFTHandler(nftService, nftContractAddress, appLogger)
 	overviewHandler := handler.NewOverviewHandler(auctionService, nftContract, nftContractAddress, appLogger)
 

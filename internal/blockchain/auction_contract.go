@@ -5,6 +5,7 @@ import (
 	"context"
 	"fmt"
 	"math/big"
+	"time"
 
 	"github.com/ethereum/go-ethereum"
 	"github.com/ethereum/go-ethereum/accounts/abi"
@@ -129,37 +130,76 @@ func (c *AuctionContract) ParseAuctionCreatedFromReceipt(ctx context.Context, tx
 	return 0, fmt.Errorf("AuctionCreated event not found in transaction %s", txHash)
 }
 
-// ScanAuctionIDs 扫描合约从创世块到最新块的所有 AuctionCreated 事件，返回所有 auctionId 列表。
-// 用于历史数据补录。
-func (c *AuctionContract) ScanAuctionIDs(ctx context.Context) ([]uint64, error) {
+// scanBlockChunkSize 单次 FilterLogs 查询的区块数
+const scanBlockChunkSize = 2000
+
+// scanChunkDelay 每段请求之间的间隔，避免 Infura 等 RPC 429 限流
+const scanChunkDelay = 400 * time.Millisecond
+
+// ScanAuctionIDs 扫描合约从 fromBlock 到最新块的所有 AuctionCreated 事件，返回所有 auctionId 列表。
+// 用于历史数据补录。fromBlock 为 0 时从创世块开始；可设 AUCTION_DEPLOY_BLOCK 减少扫描量。
+func (c *AuctionContract) ScanAuctionIDs(ctx context.Context, fromBlockStart uint64) ([]uint64, error) {
 	if c == nil || c.client == nil {
 		return nil, fmt.Errorf("blockchain client not available")
 	}
 
-	query := ethereum.FilterQuery{
-		Addresses: []common.Address{c.address},
-		Topics:    [][]common.Hash{{auctionCreatedTopic}},
-	}
-
-	logs, err := c.client.FilterLogs(ctx, query)
+	toBlock, err := c.client.BlockNumber(ctx)
 	if err != nil {
-		return nil, fmt.Errorf("failed to filter logs: %w", err)
+		return nil, fmt.Errorf("failed to get block number: %w", err)
 	}
 
+	fromBlock := fromBlockStart
 	var ids []uint64
-	for _, log := range logs {
-		if err := c.parseAuctionCreatedLog(log, &ids); err != nil {
-			continue
+	seen := make(map[uint64]bool)
+
+	for fromBlock <= toBlock {
+		chunkEnd := fromBlock + scanBlockChunkSize - 1
+		if chunkEnd > toBlock {
+			chunkEnd = toBlock
+		}
+
+		query := ethereum.FilterQuery{
+			FromBlock: new(big.Int).SetUint64(fromBlock),
+			ToBlock:   new(big.Int).SetUint64(chunkEnd),
+			Addresses: []common.Address{c.address},
+			Topics:    [][]common.Hash{{auctionCreatedTopic}},
+		}
+
+		logs, err := c.client.FilterLogs(ctx, query)
+		if err != nil {
+			return nil, fmt.Errorf("failed to filter logs (blocks %d-%d): %w", fromBlock, chunkEnd, err)
+		}
+
+		for _, log := range logs {
+			if err := c.parseAuctionCreatedLog(log, &ids, seen); err != nil {
+				continue
+			}
+		}
+
+		fromBlock = chunkEnd + 1
+		if chunkEnd >= toBlock {
+			break
+		}
+		// 避免 RPC 限流（如 Infura 429）
+		select {
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		case <-time.After(scanChunkDelay):
 		}
 	}
+
 	return ids, nil
 }
 
-func (c *AuctionContract) parseAuctionCreatedLog(log types.Log, ids *[]uint64) error {
+func (c *AuctionContract) parseAuctionCreatedLog(log types.Log, ids *[]uint64, seen map[uint64]bool) error {
 	if len(log.Topics) < 2 {
 		return fmt.Errorf("insufficient topics")
 	}
 	auctionID := new(big.Int).SetBytes(log.Topics[1].Bytes()).Uint64()
+	if seen[auctionID] {
+		return nil
+	}
+	seen[auctionID] = true
 	*ids = append(*ids, auctionID)
 	return nil
 }

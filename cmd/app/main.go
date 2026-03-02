@@ -79,7 +79,7 @@ func main() {
 	bidService := service.NewBidService(db.DB)
 	nftService := service.NewNFTService(db.DB, nftContract, metadataFetcher)
 
-	r := app.SetupRouter(userService, auctionService, bidService, nftService, nftContract, bcConfig.NFTContractAddress, appConfig, appLogger)
+	r := app.SetupRouter(userService, auctionService, bidService, nftService, nftContract, bcConfig.NFTContractAddress, bcConfig.AuctionDeployBlock, appConfig, appLogger)
 
 	port := os.Getenv("APP_PORT")
 	if port == "" {
