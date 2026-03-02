@@ -51,10 +51,11 @@ func (h *AuctionHandler) List(c *gin.Context) {
 		h.logger.Info("auction_list empty page=%d limit=%d status=%s (DB has no matching records)", page, limit, status)
 	}
 
-	// 简化列表响应，不包含 bid 和 nft（减少查询）
+	// 列表响应：附带 NFT 元数据（优先读 DB 缓存，首次从链上/IPFS 获取）
 	var list []gin.H
 	for _, item := range items {
-		list = append(list, auctionToResponse(&item, nil, nil))
+		nft, _ := h.nftService.GetOrFetchMetadata(c.Request.Context(), item.NFTContract, item.TokenID)
+		list = append(list, auctionToResponse(&item, nil, nft))
 	}
 
 	response.Success(c, gin.H{

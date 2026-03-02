@@ -56,14 +56,16 @@ func SetupRouter(
 	{
 		auth := api.Group("/auth")
 		{
-			auth.POST("/register", userHandler.Register)
-			auth.POST("/login", userHandler.Login)
+			auth.POST("/wallet", userHandler.ConnectWallet)   // 前端连接钱包：POST { "walletAddress": "0x..." }，返回 user + token
+			auth.POST("/register", userHandler.Register)     // 可选，传统注册
+			auth.POST("/login", userHandler.Login)           // 可选，传统登录
 			auth.POST("/logout", authMiddleware.JWTAuth(), userHandler.Logout)
 		}
 
 		users := api.Group("/users")
 		{
 			users.GET("/me", authMiddleware.JWTAuth(), userHandler.GetProfile)
+			users.PATCH("/me", authMiddleware.JWTAuth(), userHandler.UpdateProfile) // 修改当前用户资料
 			users.GET("/:address/auctions", auctionHandler.ListByAddress)
 		}
 
