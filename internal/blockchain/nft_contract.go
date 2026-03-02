@@ -10,11 +10,12 @@ import (
 	"github.com/ethereum/go-ethereum/common"
 )
 
-// ERC721 / NFTMarketplace 的 ABI 片段（tokenURI + totalSupply + nextTokenId）
+// ERC721 / NFTMarketplace 的 ABI 片段（tokenURI + totalSupply + nextTokenId + ownerOf）
 const erc721TokenURIABI = `[
   {"inputs":[{"internalType":"uint256","name":"tokenId","type":"uint256"}],"name":"tokenURI","outputs":[{"internalType":"string","name":"","type":"string"}],"stateMutability":"view","type":"function"},
   {"inputs":[],"name":"totalSupply","outputs":[{"internalType":"uint256","name":"","type":"uint256"}],"stateMutability":"view","type":"function"},
-  {"inputs":[],"name":"nextTokenId","outputs":[{"internalType":"uint256","name":"","type":"uint256"}],"stateMutability":"view","type":"function"}
+  {"inputs":[],"name":"nextTokenId","outputs":[{"internalType":"uint256","name":"","type":"uint256"}],"stateMutability":"view","type":"function"},
+  {"inputs":[{"internalType":"uint256","name":"tokenId","type":"uint256"}],"name":"ownerOf","outputs":[{"internalType":"address","name":"","type":"address"}],"stateMutability":"view","type":"function"}
 ]`
 
 // NFTContract 用于调用任意 ERC721 的 tokenURI
@@ -111,4 +112,28 @@ func (c *NFTContract) NextTokenId(ctx context.Context, contractAddress string) (
 		return 0, nil
 	}
 	return n.Uint64(), nil
+}
+
+// OwnerOf 调用 ERC721 的 ownerOf(tokenId)，返回持有人地址
+func (c *NFTContract) OwnerOf(ctx context.Context, contractAddress string, tokenID uint64) (common.Address, error) {
+	if c == nil || c.client == nil || contractAddress == "" {
+		return common.Address{}, nil
+	}
+	addr := common.HexToAddress(contractAddress)
+	data, err := c.abi.Pack("ownerOf", new(big.Int).SetUint64(tokenID))
+	if err != nil {
+		return common.Address{}, err
+	}
+	result, err := c.client.CallContract(ctx, ethereum.CallMsg{
+		To:   &addr,
+		Data: data,
+	}, nil)
+	if err != nil {
+		return common.Address{}, err
+	}
+	var owner common.Address
+	if err := c.abi.UnpackIntoInterface(&owner, "ownerOf", result); err != nil {
+		return common.Address{}, err
+	}
+	return owner, nil
 }

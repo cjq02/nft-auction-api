@@ -94,3 +94,65 @@ func (s *NFTService) UpsertMetadata(item *model.NFTMetadata) error {
 		Assign(item).
 		FirstOrCreate(item).Error
 }
+
+// MintedNFTItem 已铸造 NFT 列表项
+type MintedNFTItem struct {
+	TokenID     uint64  `json:"tokenId"`
+	Owner       string  `json:"owner"`
+	TokenURI    *string `json:"tokenUri,omitempty"`
+	Name        *string `json:"name,omitempty"`
+	Description *string `json:"description,omitempty"`
+	Image       *string `json:"image,omitempty"`
+}
+
+// ListMintedNFTs 返回指定合约下已铸造 NFT 列表（分页），需链上 totalSupply + ownerOf + 元数据
+func (s *NFTService) ListMintedNFTs(ctx context.Context, contract string, page, limit int) (total uint64, items []MintedNFTItem, err error) {
+	if s.nftContract == nil || contract == "" {
+		return 0, nil, errors.NewNotFoundError("NFT 合约未配置或未指定 contract")
+	}
+	total, err = s.nftContract.TotalSupply(ctx, contract)
+	if err != nil {
+		return 0, nil, errors.NewBlockchainError("获取 totalSupply 失败", err)
+	}
+	if total == 0 {
+		return 0, []MintedNFTItem{}, nil
+	}
+	if page < 1 {
+		page = 1
+	}
+	if limit < 1 {
+		limit = 20
+	}
+	if limit > 100 {
+		limit = 100
+	}
+	offset := (page - 1) * limit
+	startID := uint64(offset) + 1
+	if startID > total {
+		return total, []MintedNFTItem{}, nil
+	}
+	endID := startID + uint64(limit) - 1
+	if endID > total {
+		endID = total
+	}
+	items = make([]MintedNFTItem, 0, endID-startID+1)
+	for tokenID := startID; tokenID <= endID; tokenID++ {
+		owner, err := s.nftContract.OwnerOf(ctx, contract, tokenID)
+		if err != nil {
+			continue
+		}
+		meta, _ := s.GetOrFetchMetadata(ctx, contract, tokenID)
+		item := MintedNFTItem{
+			TokenID: tokenID,
+			Owner:   owner.Hex(),
+		}
+		if meta != nil {
+			item.TokenURI = meta.TokenURI
+			item.Name = meta.Name
+			item.Description = meta.Description
+			item.Image = meta.Image
+		}
+		items = append(items, item)
+	}
+	return total, items, nil
+}

@@ -12,14 +12,16 @@ import (
 )
 
 type NFTHandler struct {
-	nftService *service.NFTService
-	logger     *logger.Logger
+	nftService              *service.NFTService
+	defaultNFTContractAddr  string
+	logger                  *logger.Logger
 }
 
-func NewNFTHandler(nftService *service.NFTService, appLogger *logger.Logger) *NFTHandler {
+func NewNFTHandler(nftService *service.NFTService, defaultNFTContractAddr string, appLogger *logger.Logger) *NFTHandler {
 	return &NFTHandler{
-		nftService: nftService,
-		logger:     appLogger,
+		nftService:             nftService,
+		defaultNFTContractAddr: defaultNFTContractAddr,
+		logger:                 appLogger,
 	}
 }
 
@@ -47,5 +49,33 @@ func (h *NFTHandler) GetMetadata(c *gin.Context) {
 		"name":        metadata.Name,
 		"description": metadata.Description,
 		"image":       metadata.Image,
+	})
+}
+
+// List 已铸造 NFT 列表：GET /api/nfts/list?contract=0x...&page=1&limit=20
+// contract 可选，不传则用配置的 NFT_CONTRACT_ADDRESS
+func (h *NFTHandler) List(c *gin.Context) {
+	contract := c.Query("contract")
+	if contract == "" {
+		contract = h.defaultNFTContractAddr
+	}
+	if contract == "" {
+		response.HandleError(c, h.logger, errors.NewValidationError("请指定 contract 或配置 NFT_CONTRACT_ADDRESS"))
+		return
+	}
+	page, _ := strconv.Atoi(c.DefaultQuery("page", "1"))
+	limit, _ := strconv.Atoi(c.DefaultQuery("limit", "20"))
+
+	total, items, err := h.nftService.ListMintedNFTs(c.Request.Context(), contract, page, limit)
+	if err != nil {
+		response.HandleError(c, h.logger, err)
+		return
+	}
+
+	response.Success(c, gin.H{
+		"total": total,
+		"page":  page,
+		"limit": limit,
+		"items": items,
 	})
 }

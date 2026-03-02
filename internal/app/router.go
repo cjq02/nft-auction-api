@@ -40,7 +40,7 @@ func SetupRouter(
 
 	userHandler := handler.NewUserHandler(userService, jwtService, appLogger)
 	auctionHandler := handler.NewAuctionHandler(auctionService, bidService, nftService, appLogger)
-	nftHandler := handler.NewNFTHandler(nftService, appLogger)
+	nftHandler := handler.NewNFTHandler(nftService, nftContractAddress, appLogger)
 	overviewHandler := handler.NewOverviewHandler(auctionService, nftContract, nftContractAddress, appLogger)
 
 	r.GET("/health", func(c *gin.Context) {
@@ -76,6 +76,7 @@ func SetupRouter(
 
 		nfts := api.Group("/nfts")
 		{
+			nfts.GET("/list", nftHandler.List)
 			nfts.GET("/:contract/:tokenId", nftHandler.GetMetadata)
 		}
 
