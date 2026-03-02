@@ -3,12 +3,13 @@ package service
 import (
 	"context"
 
+	"github.com/ethereum/go-ethereum/common"
+	"gorm.io/gorm"
+
 	"nft-auction-api/internal/blockchain"
 	"nft-auction-api/internal/errors"
 	"nft-auction-api/internal/metadata"
 	"nft-auction-api/internal/model"
-
-	"gorm.io/gorm"
 )
 
 type NFTService struct {
@@ -95,7 +96,51 @@ func (s *NFTService) UpsertMetadata(item *model.NFTMetadata) error {
 		FirstOrCreate(item).Error
 }
 
-// MintedNFTItem 已铸造 NFT 列表项
+// GetNFTsMintedTo 查询铸造给指定地址的所有 NFT（通过链上 NFTMinted 事件日志），分页返回
+func (s *NFTService) GetNFTsMintedTo(ctx context.Context, contract, owner string, page, limit int) (total uint64, items []MintedNFTItem, err error) {
+	if s.nftContract == nil || contract == "" {
+		return 0, nil, errors.NewNotFoundError("NFT 合约未配置或未指定 contract")
+	}
+	if page < 1 {
+		page = 1
+	}
+	if limit < 1 {
+		limit = 20
+	}
+	if limit > 100 {
+		limit = 100
+	}
+
+	toAddr := common.HexToAddress(owner)
+	records, err := s.nftContract.GetMintedToAddress(ctx, contract, toAddr)
+	if err != nil {
+		return 0, nil, errors.NewBlockchainError("查询铸造记录失败", err)
+	}
+
+	total = uint64(len(records))
+	offset := (page - 1) * limit
+	if offset >= int(total) {
+		return total, []MintedNFTItem{}, nil
+	}
+	end := offset + limit
+	if end > int(total) {
+		end = int(total)
+	}
+
+	items = make([]MintedNFTItem, 0, end-offset)
+	for _, rec := range records[offset:end] {
+		meta, _ := s.GetOrFetchMetadata(ctx, contract, rec.TokenID)
+		item := MintedNFTItem{TokenID: rec.TokenID, Owner: rec.To.Hex()}
+		if meta != nil {
+			item.TokenURI = meta.TokenURI
+			item.Name = meta.Name
+			item.Description = meta.Description
+			item.Image = meta.Image
+		}
+		items = append(items, item)
+	}
+	return total, items, nil
+}
 type MintedNFTItem struct {
 	TokenID     uint64  `json:"tokenId"`
 	Owner       string  `json:"owner"`

@@ -52,8 +52,8 @@ func (h *NFTHandler) GetMetadata(c *gin.Context) {
 	})
 }
 
-// List 已铸造 NFT 列表：GET /api/nfts/list?contract=0x...&page=1&limit=20
-// contract 可选，不传则用配置的 NFT_CONTRACT_ADDRESS
+// List 已铸造 NFT 列表：GET /api/nfts/list?contract=0x...&owner=0x...&page=1&limit=20
+// contract 可选，不传则用配置的 NFT_CONTRACT_ADDRESS；owner 可选，传则只返回该地址持有的 NFT
 func (h *NFTHandler) List(c *gin.Context) {
 	contract := c.Query("contract")
 	if contract == "" {
@@ -63,10 +63,20 @@ func (h *NFTHandler) List(c *gin.Context) {
 		response.HandleError(c, h.logger, errors.NewValidationError("请指定 contract 或配置 NFT_CONTRACT_ADDRESS"))
 		return
 	}
+	owner := c.Query("owner")
 	page, _ := strconv.Atoi(c.DefaultQuery("page", "1"))
 	limit, _ := strconv.Atoi(c.DefaultQuery("limit", "20"))
 
-	total, items, err := h.nftService.ListMintedNFTs(c.Request.Context(), contract, page, limit)
+	var (
+		total uint64
+		items interface{}
+		err   error
+	)
+	if owner != "" {
+		total, items, err = h.nftService.GetNFTsMintedTo(c.Request.Context(), contract, owner, page, limit)
+	} else {
+		total, items, err = h.nftService.ListMintedNFTs(c.Request.Context(), contract, page, limit)
+	}
 	if err != nil {
 		response.HandleError(c, h.logger, err)
 		return
