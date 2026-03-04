@@ -7,9 +7,11 @@ import (
 	"nft-auction-api/internal/service"
 
 	"github.com/gin-gonic/gin"
+	"gorm.io/gorm"
 )
 
 type OverviewHandler struct {
+	db                 *gorm.DB
 	auctionService     *service.AuctionService
 	nftContract        *blockchain.NFTContract
 	nftContractAddress string
@@ -17,12 +19,14 @@ type OverviewHandler struct {
 }
 
 func NewOverviewHandler(
+	db *gorm.DB,
 	auctionService *service.AuctionService,
 	nftContract *blockchain.NFTContract,
 	nftContractAddress string,
 	appLogger *logger.Logger,
 ) *OverviewHandler {
 	return &OverviewHandler{
+		db:                 db,
 		auctionService:     auctionService,
 		nftContract:        nftContract,
 		nftContractAddress: nftContractAddress,
@@ -61,10 +65,14 @@ func (h *OverviewHandler) GetOverview(c *gin.Context) {
 		} else {
 			data["nft"].(gin.H)["totalSupply"] = supply
 		}
-		burned, err := h.nftContract.CountBurnedFromLogs(ctx, h.nftContractAddress, 0)
+		var burned uint64
+		var gotBurned bool
+		burned, err = h.nftContract.CountBurnedFromLogs(ctx, h.nftContractAddress, 0)
+		gotBurned = (err == nil)
 		if err != nil {
-			h.logger.Warn("获取 NFT 已销毁数量(事件扫描) 失败: %v", err)
-		} else {
+			h.logger.Warn("获取 NFT 已销毁数量 失败: %v", err)
+		}
+		if gotBurned {
 			data["nft"].(gin.H)["burnedCount"] = burned
 			if supply, ok := data["nft"].(gin.H)["totalSupply"].(uint64); ok {
 				if supply >= burned {

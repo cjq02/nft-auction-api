@@ -4,6 +4,7 @@ import (
 	"os"
 
 	"github.com/gin-gonic/gin"
+	"gorm.io/gorm"
 
 	"nft-auction-api/internal/blockchain"
 	"nft-auction-api/internal/config"
@@ -14,6 +15,7 @@ import (
 )
 
 func SetupRouter(
+	db *gorm.DB,
 	userService *service.UserService,
 	auctionService *service.AuctionService,
 	bidService *service.BidService,
@@ -43,7 +45,7 @@ func SetupRouter(
 	userHandler := handler.NewUserHandler(userService, jwtService, appLogger)
 	auctionHandler := handler.NewAuctionHandler(auctionService, bidService, nftService, backfillStartBlock, defaultAuctionContractAddress, appLogger)
 	nftHandler := handler.NewNFTHandler(nftService, nftContractAddress, appLogger)
-	overviewHandler := handler.NewOverviewHandler(auctionService, nftContract, nftContractAddress, appLogger)
+	overviewHandler := handler.NewOverviewHandler(db, auctionService, nftContract, nftContractAddress, appLogger)
 
 	r.GET("/health", func(c *gin.Context) {
 		c.JSON(200, gin.H{"status": "ok"})

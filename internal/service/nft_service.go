@@ -97,6 +97,12 @@ func (s *NFTService) UpsertMetadata(item *model.NFTMetadata) error {
 		FirstOrCreate(item).Error
 }
 
+// DeleteMetadata 删除指定 NFT 的元数据缓存（销毁时调用，与 t_nft_metadata 同步）
+func (s *NFTService) DeleteMetadata(ctx context.Context, nftContract string, tokenID uint64) error {
+	return s.db.WithContext(ctx).Where("nft_contract = ? AND token_id = ?", nftContract, tokenID).
+		Delete(&model.NFTMetadata{}).Error
+}
+
 // GetNFTsMintedTo 查询铸造给指定地址且当前仍由其持有的 NFT（通过 NFTMinted 事件 + ownerOf 过滤已销毁/已转出），分页返回
 func (s *NFTService) GetNFTsMintedTo(ctx context.Context, contract, owner string, page, limit int) (total uint64, items []MintedNFTItem, err error) {
 	if s.nftContract == nil || contract == "" {

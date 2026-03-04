@@ -14,6 +14,7 @@ import (
 	"nft-auction-api/internal/app"
 	"nft-auction-api/internal/blockchain"
 	"nft-auction-api/internal/config"
+	"nft-auction-api/internal/indexer"
 	"nft-auction-api/internal/logger"
 	"nft-auction-api/internal/metadata"
 	"nft-auction-api/internal/model"
@@ -93,23 +94,36 @@ func main() {
 			log.Printf("Warning: WebSocket blockchain client init failed: %v — event listener disabled", wsErr)
 		} else {
 			defer wsClient.Close()
-			eventIndexer := service.NewEventIndexer(
+			auctionIdx := indexer.NewAuctionIndexer(
 				db.DB,
 				wsClient,
 				auctionService,
+				bidService,
 				bcConfig.AuctionContractAddress,
 				bcConfig.AuctionDeployBlock,
 			)
-			if eventIndexer.IsAvailable() {
-				go eventIndexer.Start(ctx)
-				log.Printf("Event indexer started (WS: %s)", bcConfig.WSRPCUrl)
+			if auctionIdx.IsAvailable() {
+				go auctionIdx.Start(ctx)
+				log.Printf("Auction indexer started (WS: %s)", bcConfig.WSRPCUrl)
+			}
+			nftIdx := indexer.NewNFTIndexer(
+				db.DB,
+				wsClient,
+				nftContract,
+				bcConfig.NFTContractAddress,
+				bcConfig.NFTDeployBlock, // 必须设置 NFT_DEPLOY_BLOCK，否则从 0 扫易触发 RPC internal error
+				nftService, // 铸造时预填 t_nft_metadata
+			)
+			if nftIdx.IsAvailable() {
+				go nftIdx.Start(ctx)
+				log.Printf("NFT indexer started (contract: %s)", bcConfig.NFTContractAddress)
 			}
 		}
 	} else {
 		log.Printf("WS_RPC_URL not set — event listener disabled (set it to enable real-time indexing)")
 	}
 
-	r := app.SetupRouter(userService, auctionService, bidService, nftService, nftContract, bcConfig.NFTContractAddress, bcConfig.AuctionDeployBlock, bcConfig.AuctionContractAddress, appConfig, appLogger)
+	r := app.SetupRouter(db.DB, userService, auctionService, bidService, nftService, nftContract, bcConfig.NFTContractAddress, bcConfig.AuctionDeployBlock, bcConfig.AuctionContractAddress, appConfig, appLogger)
 
 	port := os.Getenv("APP_PORT")
 	if port == "" {
