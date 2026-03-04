@@ -108,6 +108,16 @@ func (h *UserHandler) Logout(c *gin.Context) {
 	response.SuccessWithMessage(c, gin.H{}, "退出登录成功")
 }
 
+// List 用户列表（用户名+钱包地址），供铸造 NFT 等下拉选择
+func (h *UserHandler) List(c *gin.Context) {
+	list, err := h.userService.List()
+	if err != nil {
+		response.HandleError(c, h.logger, err)
+		return
+	}
+	response.Success(c, gin.H{"list": list})
+}
+
 func (h *UserHandler) GetProfile(c *gin.Context) {
 	userID, exists := c.Get("userID")
 	if !exists {

@@ -89,6 +89,19 @@ func (s *UserService) GetByID(id uint) (*model.User, error) {
 	return &user, nil
 }
 
+// List 返回所有用户（仅 id、username、wallet_address），供铸造页下拉等使用
+func (s *UserService) List() ([]*model.UserResponse, error) {
+	var users []model.User
+	if err := s.db.Select("id", "username", "wallet_address", "created_at", "updated_at").Order("username").Find(&users).Error; err != nil {
+		return nil, errors.NewDatabaseError(err)
+	}
+	out := make([]*model.UserResponse, 0, len(users))
+	for i := range users {
+		out = append(out, users[i].ToResponse())
+	}
+	return out, nil
+}
+
 // ConnectOrCreateByWallet 根据钱包地址查找用户，不存在则创建（无密码，仅钱包登录）
 func (s *UserService) ConnectOrCreateByWallet(walletAddress string) (*model.User, error) {
 	var user model.User

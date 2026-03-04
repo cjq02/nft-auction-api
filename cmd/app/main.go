@@ -78,7 +78,7 @@ func main() {
 	metadataFetcher := metadata.NewFetcher(bcConfig.IPFSGateway)
 
 	userService := service.NewUserService(db.DB)
-	auctionService := service.NewAuctionService(db.DB, auctionContract)
+	auctionService := service.NewAuctionService(db.DB, auctionContract, bcConfig.AuctionContractAddress)
 	bidService := service.NewBidService(db.DB)
 	nftService := service.NewNFTService(db.DB, nftContract, metadataFetcher)
 
@@ -109,7 +109,7 @@ func main() {
 		log.Printf("WS_RPC_URL not set — event listener disabled (set it to enable real-time indexing)")
 	}
 
-	r := app.SetupRouter(userService, auctionService, bidService, nftService, nftContract, bcConfig.NFTContractAddress, bcConfig.AuctionDeployBlock, appConfig, appLogger)
+	r := app.SetupRouter(userService, auctionService, bidService, nftService, nftContract, bcConfig.NFTContractAddress, bcConfig.AuctionDeployBlock, bcConfig.AuctionContractAddress, appConfig, appLogger)
 
 	port := os.Getenv("APP_PORT")
 	if port == "" {

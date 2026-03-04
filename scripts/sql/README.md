@@ -5,6 +5,7 @@
 1. `001_create_database.sql` - 创建数据库和表
 2. `002_create_user.sql` - 创建应用用户（可选，按需修改密码）
 3. `003_update_t_users_required_fields.sql` - **已有库时**：更新 t_users（email 选填、wallet_address 必填）
+4. `004_reorder_contract_columns.sql` - **已有库且已跑过 AutoMigrate 加过合约列时**：把 auction_contract / contract_address 移到前面（紧接 id、auction_id 后）
 
 ## 快速开始
 
@@ -18,6 +19,9 @@ mysql -u root -p < scripts/sql/002_create_user.sql
 
 # 3. 若数据库是旧版建的（t_users 曾为 email 必填、wallet_address 选填），执行更新脚本
 mysql -u root -p nft_auction < scripts/sql/003_update_t_users_required_fields.sql
+
+# 4. 若已跑过 API 且 auction_contract/contract_address 被加在表尾，希望把合约列移到前面时执行
+mysql -u root -p nft_auction < scripts/sql/004_reorder_contract_columns.sql
 ```
 
 ## 表结构

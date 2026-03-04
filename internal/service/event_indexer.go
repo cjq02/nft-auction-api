@@ -15,10 +15,11 @@ import (
 // EventIndexer wires the blockchain EventListener to the database.
 // It handles AuctionCreated, BidPlaced, AuctionEnded, and AuctionCancelled events.
 type EventIndexer struct {
-	db             *gorm.DB
-	auctionService *AuctionService
-	listener       *blockchain.EventListener
-	deployBlock    uint64
+	db              *gorm.DB
+	auctionService  *AuctionService
+	listener        *blockchain.EventListener
+	contractAddress string // 当前监听的拍卖合约地址，写入 DB 与 checkpoint
+	deployBlock     uint64
 }
 
 // NewEventIndexer builds the indexer and configures event handlers.
@@ -31,9 +32,10 @@ func NewEventIndexer(
 	deployBlock uint64,
 ) *EventIndexer {
 	idx := &EventIndexer{
-		db:             db,
-		auctionService: auctionService,
-		deployBlock:    deployBlock,
+		db:              db,
+		auctionService:  auctionService,
+		contractAddress: contractAddress,
+		deployBlock:     deployBlock,
 	}
 
 	handlers := blockchain.EventHandlers{
@@ -63,25 +65,23 @@ func (i *EventIndexer) Start(ctx context.Context) {
 	i.listener.Run(ctx, fromBlock, i.saveCheckpoint)
 }
 
-// -------- checkpoint (t_indexer_state, single row ID=1) --------
+// -------- checkpoint (t_indexer_state, per contract) --------
 
 func (i *EventIndexer) loadCheckpoint() uint64 {
 	var state model.IndexerState
-	if err := i.db.First(&state).Error; err != nil {
-		// no checkpoint yet — start from deploy block
+	if err := i.db.Where("contract_address = ?", i.contractAddress).First(&state).Error; err != nil {
 		return i.deployBlock
 	}
 	if state.LastIndexedBlock == 0 {
 		return i.deployBlock
 	}
-	// resume from the block AFTER the last fully-processed one
 	return state.LastIndexedBlock + 1
 }
 
 func (i *EventIndexer) saveCheckpoint(block uint64) {
-	state := model.IndexerState{ID: 1, LastIndexedBlock: block}
+	state := model.IndexerState{ContractAddress: i.contractAddress, LastIndexedBlock: block}
 	if err := i.db.Clauses(clause.OnConflict{
-		Columns:   []clause.Column{{Name: "id"}},
+		Columns:   []clause.Column{{Name: "contract_address"}},
 		DoUpdates: clause.AssignmentColumns([]string{"last_indexed_block"}),
 	}).Create(&state).Error; err != nil {
 		log.Printf("[event_indexer] saveCheckpoint failed block=%d err=%v", block, err)
@@ -94,7 +94,7 @@ func (i *EventIndexer) onAuctionCreated(ctx context.Context, e blockchain.Auctio
 	log.Printf("[event_indexer] AuctionCreated auctionId=%d seller=%s block=%d",
 		e.AuctionID, e.Seller.Hex(), e.BlockNumber)
 
-	if _, err := i.auctionService.IndexFromAuctionID(ctx, e.AuctionID); err != nil {
+	if _, err := i.auctionService.IndexFromAuctionID(ctx, i.contractAddress, e.AuctionID); err != nil {
 		log.Printf("[event_indexer] AuctionCreated index_failed auctionId=%d err=%v", e.AuctionID, err)
 	}
 }
@@ -110,12 +110,13 @@ func (i *EventIndexer) onBidPlaced(ctx context.Context, e blockchain.BidPlacedEv
 	}
 
 	bid := &model.BidIndex{
-		AuctionID:    e.AuctionID,
-		Bidder:       e.Bidder.Hex(),
-		Amount:       e.Amount.String(),
-		BidTimestamp: e.BlockTime,
-		IsETH:        e.IsETH,
-		TxHash:       e.TxHash,
+		AuctionContract: i.contractAddress,
+		AuctionID:       e.AuctionID,
+		Bidder:          e.Bidder.Hex(),
+		Amount:          e.Amount.String(),
+		BidTimestamp:    e.BlockTime,
+		IsETH:           e.IsETH,
+		TxHash:          e.TxHash,
 	}
 	if err := i.db.Create(bid).Error; err != nil {
 		log.Printf("[event_indexer] BidPlaced db_create_failed auctionId=%d err=%v", e.AuctionID, err)
@@ -127,7 +128,7 @@ func (i *EventIndexer) onAuctionEnded(ctx context.Context, e blockchain.AuctionE
 		e.AuctionID, e.Winner.Hex(), e.BlockNumber)
 
 	if err := i.db.Model(&model.AuctionIndex{}).
-		Where("auction_id = ?", e.AuctionID).
+		Where("auction_contract = ? AND auction_id = ?", i.contractAddress, e.AuctionID).
 		Update("status", model.AuctionStatusEnded).Error; err != nil {
 		log.Printf("[event_indexer] AuctionEnded update_failed auctionId=%d err=%v", e.AuctionID, err)
 	}
@@ -137,7 +138,7 @@ func (i *EventIndexer) onAuctionCancelled(ctx context.Context, e blockchain.Auct
 	log.Printf("[event_indexer] AuctionCancelled auctionId=%d block=%d", e.AuctionID, e.BlockNumber)
 
 	if err := i.db.Model(&model.AuctionIndex{}).
-		Where("auction_id = ?", e.AuctionID).
+		Where("auction_contract = ? AND auction_id = ?", i.contractAddress, e.AuctionID).
 		Update("status", model.AuctionStatusCancelled).Error; err != nil {
 		log.Printf("[event_indexer] AuctionCancelled update_failed auctionId=%d err=%v", e.AuctionID, err)
 	}

@@ -13,11 +13,12 @@ import (
 )
 
 type AuctionHandler struct {
-	auctionService      *service.AuctionService
-	bidService          *service.BidService
-	nftService          *service.NFTService
-	backfillStartBlock  uint64
-	logger              *logger.Logger
+	auctionService       *service.AuctionService
+	bidService           *service.BidService
+	nftService           *service.NFTService
+	backfillStartBlock   uint64
+	defaultContractAddr  string // 默认拍卖合约，用于 Backfill 与 ListBids 时解析空 contract
+	logger               *logger.Logger
 }
 
 func NewAuctionHandler(
@@ -25,14 +26,16 @@ func NewAuctionHandler(
 	bidService *service.BidService,
 	nftService *service.NFTService,
 	backfillStartBlock uint64,
+	defaultContractAddr string,
 	appLogger *logger.Logger,
 ) *AuctionHandler {
 	return &AuctionHandler{
-		auctionService:     auctionService,
-		bidService:         bidService,
-		nftService:         nftService,
-		backfillStartBlock: backfillStartBlock,
-		logger:             appLogger,
+		auctionService:      auctionService,
+		bidService:          bidService,
+		nftService:          nftService,
+		backfillStartBlock:  backfillStartBlock,
+		defaultContractAddr: defaultContractAddr,
+		logger:              appLogger,
 	}
 }
 
@@ -40,8 +43,9 @@ func (h *AuctionHandler) List(c *gin.Context) {
 	page, _ := strconv.Atoi(c.DefaultQuery("page", "1"))
 	limit, _ := strconv.Atoi(c.DefaultQuery("limit", "10"))
 	status := c.Query("status")
+	contract := c.Query("contract")
 
-	items, total, err := h.auctionService.List(page, limit, status)
+	items, total, err := h.auctionService.List(page, limit, status, contract)
 	if err != nil {
 		h.logger.Error("auction_list failed page=%d limit=%d status=%s err=%v", page, limit, status, err)
 		response.HandleError(c, h.logger, err)
@@ -74,14 +78,19 @@ func (h *AuctionHandler) GetByID(c *gin.Context) {
 		return
 	}
 
-	auction, err := h.auctionService.GetByAuctionID(auctionID)
+	contract := c.Query("contract")
+	auction, err := h.auctionService.GetByAuctionID(auctionID, contract)
 	if err != nil {
 		response.HandleError(c, h.logger, err)
 		return
 	}
 
+	bidContract := auction.AuctionContract
+	if bidContract == "" {
+		bidContract = h.defaultContractAddr
+	}
 	var highestBid *model.BidIndex
-	bids, _ := h.bidService.ListByAuctionID(auctionID)
+	bids, _ := h.bidService.ListByAuctionID(auctionID, bidContract)
 	if len(bids) > 0 {
 		highestBid = &bids[0]
 	}
@@ -101,8 +110,9 @@ func (h *AuctionHandler) ListByAddress(c *gin.Context) {
 
 	page, _ := strconv.Atoi(c.DefaultQuery("page", "1"))
 	limit, _ := strconv.Atoi(c.DefaultQuery("limit", "10"))
+	contract := c.Query("contract")
 
-	items, total, err := h.auctionService.ListBySeller(address, page, limit)
+	items, total, err := h.auctionService.ListBySeller(address, page, limit, contract)
 	if err != nil {
 		response.HandleError(c, h.logger, err)
 		return
@@ -129,13 +139,17 @@ func (h *AuctionHandler) ListBids(c *gin.Context) {
 		return
 	}
 
-	_, err = h.auctionService.GetByAuctionID(auctionID)
+	contract := c.Query("contract")
+	auction, err := h.auctionService.GetByAuctionID(auctionID, contract)
 	if err != nil {
 		response.HandleError(c, h.logger, err)
 		return
 	}
-
-	bids, err := h.bidService.ListByAuctionID(auctionID)
+	bidContract := auction.AuctionContract
+	if bidContract == "" {
+		bidContract = h.defaultContractAddr
+	}
+	bids, err := h.bidService.ListByAuctionID(auctionID, bidContract)
 	if err != nil {
 		response.HandleError(c, h.logger, err)
 		return
@@ -177,7 +191,11 @@ func (h *AuctionHandler) Create(c *gin.Context) {
 
 func (h *AuctionHandler) Backfill(c *gin.Context) {
 	h.logger.Info("backfill start startBlock=%d", h.backfillStartBlock)
-	result, err := h.auctionService.BackfillFromChain(c.Request.Context(), h.backfillStartBlock)
+	contract := h.defaultContractAddr
+	if c.Query("contract") != "" {
+		contract = c.Query("contract")
+	}
+	result, err := h.auctionService.BackfillFromChain(c.Request.Context(), contract, h.backfillStartBlock)
 	if err != nil {
 		h.logger.Error("backfill failed startBlock=%d err=%v", h.backfillStartBlock, err)
 		response.HandleError(c, h.logger, err)
@@ -192,8 +210,9 @@ func (h *AuctionHandler) Backfill(c *gin.Context) {
 
 func auctionToResponse(a *model.AuctionIndex, highestBid *model.BidIndex, nft *model.NFTMetadata) gin.H {
 	resp := gin.H{
-		"auctionId":    a.AuctionID,
-		"seller":       a.Seller,
+		"auctionId":      a.AuctionID,
+		"auctionContract": a.AuctionContract,
+		"seller":         a.Seller,
 		"nftContract":  a.NFTContract,
 		"tokenId":      a.TokenID,
 		"startTime":    a.StartTime,

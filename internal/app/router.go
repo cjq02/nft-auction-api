@@ -21,6 +21,7 @@ func SetupRouter(
 	nftContract *blockchain.NFTContract,
 	nftContractAddress string,
 	backfillStartBlock uint64,
+	defaultAuctionContractAddress string,
 	appConfig *config.AppConfig,
 	appLogger *logger.Logger,
 ) *gin.Engine {
@@ -40,7 +41,7 @@ func SetupRouter(
 	authMiddleware := middleware.NewAuthMiddleware(secretKey)
 
 	userHandler := handler.NewUserHandler(userService, jwtService, appLogger)
-	auctionHandler := handler.NewAuctionHandler(auctionService, bidService, nftService, backfillStartBlock, appLogger)
+	auctionHandler := handler.NewAuctionHandler(auctionService, bidService, nftService, backfillStartBlock, defaultAuctionContractAddress, appLogger)
 	nftHandler := handler.NewNFTHandler(nftService, nftContractAddress, appLogger)
 	overviewHandler := handler.NewOverviewHandler(auctionService, nftContract, nftContractAddress, appLogger)
 
@@ -64,6 +65,7 @@ func SetupRouter(
 
 		users := api.Group("/users")
 		{
+			users.GET("/list", userHandler.List)
 			users.GET("/me", authMiddleware.JWTAuth(), userHandler.GetProfile)
 			users.PATCH("/me", authMiddleware.JWTAuth(), userHandler.UpdateProfile) // 修改当前用户资料
 			users.GET("/:address/auctions", auctionHandler.ListByAddress)
