@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"strings"
 
 	"github.com/ethereum/go-ethereum/common"
 	"gorm.io/gorm"
@@ -128,9 +129,18 @@ func (s *NFTService) GetNFTsMintedTo(ctx context.Context, contract, owner string
 	}
 
 	items = make([]MintedNFTItem, 0, end-offset)
+	ownerAddrs := make([]string, 0, end-offset)
+	for _, rec := range records[offset:end] {
+		ownerAddrs = append(ownerAddrs, rec.To.Hex())
+	}
+	nameMap := s.lookupOwnerNames(ownerAddrs)
+
 	for _, rec := range records[offset:end] {
 		meta, _ := s.GetOrFetchMetadata(ctx, contract, rec.TokenID)
 		item := MintedNFTItem{TokenID: rec.TokenID, Owner: rec.To.Hex()}
+		if n, ok := nameMap[strings.ToLower(rec.To.Hex())]; ok {
+			item.OwnerName = &n
+		}
 		if meta != nil {
 			item.TokenURI = meta.TokenURI
 			item.Name = meta.Name
@@ -144,10 +154,33 @@ func (s *NFTService) GetNFTsMintedTo(ctx context.Context, contract, owner string
 type MintedNFTItem struct {
 	TokenID     uint64  `json:"tokenId"`
 	Owner       string  `json:"owner"`
+	OwnerName   *string `json:"ownerName,omitempty"` // 有注册用户名则填充，否则 nil
 	TokenURI    *string `json:"tokenUri,omitempty"`
 	Name        *string `json:"name,omitempty"`
 	Description *string `json:"description,omitempty"`
 	Image       *string `json:"image,omitempty"`
+}
+
+// lookupOwnerNames 批量查询地址列表对应的用户名，返回 map[小写地址]用户名
+func (s *NFTService) lookupOwnerNames(addresses []string) map[string]string {
+	if len(addresses) == 0 {
+		return nil
+	}
+	var users []model.User
+	s.db.Where("LOWER(wallet_address) IN ?", lowered(addresses)).Find(&users)
+	m := make(map[string]string, len(users))
+	for _, u := range users {
+		m[strings.ToLower(u.WalletAddress)] = u.Username
+	}
+	return m
+}
+
+func lowered(addrs []string) []string {
+	out := make([]string, len(addrs))
+	for i, a := range addrs {
+		out[i] = strings.ToLower(a)
+	}
+	return out
 }
 
 // ListMintedNFTs 返回指定合约下已铸造 NFT 列表（分页），需链上 totalSupply + ownerOf + 元数据
@@ -180,16 +213,29 @@ func (s *NFTService) ListMintedNFTs(ctx context.Context, contract string, page, 
 	if endID > total {
 		endID = total
 	}
-	items = make([]MintedNFTItem, 0, endID-startID+1)
+	// 先收集所有 owner 地址，再批量查用户名
+	type ownerEntry struct {
+		tokenID uint64
+		owner   common.Address
+	}
+	entries := make([]ownerEntry, 0, endID-startID+1)
+	ownerAddrs := make([]string, 0, endID-startID+1)
 	for tokenID := startID; tokenID <= endID; tokenID++ {
 		owner, err := s.nftContract.OwnerOf(ctx, contract, tokenID)
 		if err != nil {
 			continue
 		}
-		meta, _ := s.GetOrFetchMetadata(ctx, contract, tokenID)
-		item := MintedNFTItem{
-			TokenID: tokenID,
-			Owner:   owner.Hex(),
+		entries = append(entries, ownerEntry{tokenID, owner})
+		ownerAddrs = append(ownerAddrs, owner.Hex())
+	}
+	nameMap := s.lookupOwnerNames(ownerAddrs)
+
+	items = make([]MintedNFTItem, 0, len(entries))
+	for _, e := range entries {
+		meta, _ := s.GetOrFetchMetadata(ctx, contract, e.tokenID)
+		item := MintedNFTItem{TokenID: e.tokenID, Owner: e.owner.Hex()}
+		if n, ok := nameMap[strings.ToLower(e.owner.Hex())]; ok {
+			item.OwnerName = &n
 		}
 		if meta != nil {
 			item.TokenURI = meta.TokenURI
