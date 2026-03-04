@@ -74,7 +74,7 @@ func SetupRouter(
 			auctions.GET("", auctionHandler.List)
 			auctions.GET("/:id", auctionHandler.GetByID)
 			auctions.GET("/:id/bids", auctionHandler.ListBids)
-			auctions.POST("", authMiddleware.JWTAuth(), auctionHandler.Create)
+			// POST "" (sync via txHash) removed — replaced by WebSocket event listener
 		}
 
 		nfts := api.Group("/nfts")

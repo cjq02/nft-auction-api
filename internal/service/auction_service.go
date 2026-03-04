@@ -196,11 +196,40 @@ func (s *AuctionService) BackfillFromChain(ctx context.Context, startBlock uint6
 	return result, nil
 }
 
+// IndexFromAuctionID 从链上读取 auctionId 对应的拍卖信息并写入数据库（幂等）。
+// 被事件监听器和 IndexFromTxHash 共同调用。
+func (s *AuctionService) IndexFromAuctionID(ctx context.Context, auctionID uint64) (*model.AuctionIndex, error) {
+	// 幂等：若已存在则直接返回
+	var existing model.AuctionIndex
+	if dbErr := s.db.Where("auction_id = ?", auctionID).First(&existing).Error; dbErr == nil {
+		log.Printf("[auction_sync] IndexFromAuctionID already_exists auctionId=%d", auctionID)
+		return &existing, nil
+	}
+
+	if s.auctionContract == nil {
+		return nil, errors.NewBlockchainError("拍卖合约未配置", nil)
+	}
+
+	chainInfo, err := s.auctionContract.GetAuction(ctx, auctionID)
+	if err != nil || chainInfo == nil {
+		log.Printf("[auction_sync] IndexFromAuctionID get_auction_failed auctionId=%d err=%v", auctionID, err)
+		return nil, errors.NewBlockchainError("从链上获取拍卖信息失败", err)
+	}
+	log.Printf("[auction_sync] IndexFromAuctionID chain_info_ok auctionId=%d seller=%s", auctionID, chainInfo.Seller.Hex())
+
+	item := s.chainInfoToIndex(auctionID, chainInfo)
+	if createErr := s.db.Create(item).Error; createErr != nil {
+		log.Printf("[auction_sync] IndexFromAuctionID db_create_failed auctionId=%d err=%v", auctionID, createErr)
+		return nil, errors.NewDatabaseError(createErr)
+	}
+	log.Printf("[auction_sync] IndexFromAuctionID db_created auctionId=%d", auctionID)
+	return item, nil
+}
+
 // IndexFromTxHash 从 txHash 解析 AuctionCreated 事件，向链上查询完整数据后写入数据库（幂等）
 func (s *AuctionService) IndexFromTxHash(ctx context.Context, txHash string) (*model.AuctionIndex, error) {
 	log.Printf("[auction_sync] IndexFromTxHash start txHash=%s", txHash)
 	if s.auctionContract == nil {
-		log.Printf("[auction_sync] IndexFromTxHash error: auction contract not configured")
 		return nil, errors.NewBlockchainError("拍卖合约未配置", nil)
 	}
 
@@ -210,27 +239,6 @@ func (s *AuctionService) IndexFromTxHash(ctx context.Context, txHash string) (*m
 		return nil, errors.NewBlockchainError("解析交易事件失败", err)
 	}
 	log.Printf("[auction_sync] IndexFromTxHash parsed auctionId=%d", auctionID)
-
-	// 幂等：若已存在则直接返回
-	var existing model.AuctionIndex
-	if dbErr := s.db.Where("auction_id = ?", auctionID).First(&existing).Error; dbErr == nil {
-		log.Printf("[auction_sync] IndexFromTxHash already_exists auctionId=%d (skipped DB insert)", auctionID)
-		return &existing, nil
-	}
-
-	chainInfo, err := s.auctionContract.GetAuction(ctx, auctionID)
-	if err != nil || chainInfo == nil {
-		log.Printf("[auction_sync] IndexFromTxHash get_auction_failed auctionId=%d err=%v", auctionID, err)
-		return nil, errors.NewBlockchainError("从链上获取拍卖信息失败", err)
-	}
-	log.Printf("[auction_sync] IndexFromTxHash chain_info_ok auctionId=%d seller=%s", auctionID, chainInfo.Seller.Hex())
-
-	item := s.chainInfoToIndex(auctionID, chainInfo)
-	if createErr := s.db.Create(item).Error; createErr != nil {
-		log.Printf("[auction_sync] IndexFromTxHash db_create_failed auctionId=%d err=%v", auctionID, createErr)
-		return nil, errors.NewDatabaseError(createErr)
-	}
-	log.Printf("[auction_sync] IndexFromTxHash db_created auctionId=%d id=%d", auctionID, item.ID)
-	return item, nil
+	return s.IndexFromAuctionID(ctx, auctionID)
 }
 

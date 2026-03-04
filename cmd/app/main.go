@@ -1,9 +1,12 @@
 package main
 
 import (
+	"context"
 	"io"
 	"log"
 	"os"
+	"os/signal"
+	"syscall"
 
 	"github.com/joho/godotenv"
 	"gorm.io/gorm"
@@ -54,15 +57,15 @@ func main() {
 	appConfig := config.NewAppConfig(appLogger)
 	bcConfig := config.NewBlockchainConfig()
 
+	// HTTP client — for contract reads (getAuction, tokenURI, etc.)
 	var bcClient *blockchain.Client
 	var auctionContract *blockchain.AuctionContract
 	var nftContract *blockchain.NFTContract
 
 	if bcConfig.RPCURL != "" {
-		var err error
 		bcClient, err = blockchain.NewClient(bcConfig.RPCURL)
 		if err != nil {
-			log.Printf("Warning: Blockchain client init failed: %v, continuing without chain reads", err)
+			log.Printf("Warning: HTTP blockchain client init failed: %v", err)
 		} else if bcClient != nil {
 			defer bcClient.Close()
 			if bcConfig.AuctionContractAddress != "" {
@@ -78,6 +81,33 @@ func main() {
 	auctionService := service.NewAuctionService(db.DB, auctionContract)
 	bidService := service.NewBidService(db.DB)
 	nftService := service.NewNFTService(db.DB, nftContract, metadataFetcher)
+
+	// WebSocket client — for event listener (SubscribeFilterLogs)
+	// Run in a separate goroutine; cancelled via context on shutdown.
+	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer cancel()
+
+	if bcConfig.WSRPCUrl != "" {
+		wsClient, wsErr := blockchain.NewClient(bcConfig.WSRPCUrl)
+		if wsErr != nil {
+			log.Printf("Warning: WebSocket blockchain client init failed: %v — event listener disabled", wsErr)
+		} else {
+			defer wsClient.Close()
+			eventIndexer := service.NewEventIndexer(
+				db.DB,
+				wsClient,
+				auctionService,
+				bcConfig.AuctionContractAddress,
+				bcConfig.AuctionDeployBlock,
+			)
+			if eventIndexer.IsAvailable() {
+				go eventIndexer.Start(ctx)
+				log.Printf("Event indexer started (WS: %s)", bcConfig.WSRPCUrl)
+			}
+		}
+	} else {
+		log.Printf("WS_RPC_URL not set — event listener disabled (set it to enable real-time indexing)")
+	}
 
 	r := app.SetupRouter(userService, auctionService, bidService, nftService, nftContract, bcConfig.NFTContractAddress, bcConfig.AuctionDeployBlock, appConfig, appLogger)
 
@@ -115,5 +145,6 @@ func autoMigrate(db *gorm.DB) error {
 		&model.AuctionIndex{},
 		&model.BidIndex{},
 		&model.NFTMetadata{},
+		&model.IndexerState{},
 	)
 }
