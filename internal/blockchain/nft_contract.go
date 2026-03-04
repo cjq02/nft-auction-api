@@ -22,6 +22,8 @@ const erc721TokenURIABI = `[
 
 // nftMintedEventSig NFTMinted(address,uint256,string) 的 keccak256 签名 topic
 var nftMintedEventSig = crypto.Keccak256Hash([]byte("NFTMinted(address,uint256,string)"))
+// nftBurnedEventSig NFTBurned(uint256 indexed tokenId) 的 keccak256 签名，用于统计已销毁数量
+var nftBurnedEventSig = crypto.Keccak256Hash([]byte("NFTBurned(uint256)"))
 
 // NFTContract 用于调用任意 ERC721 的 tokenURI
 type NFTContract struct {
@@ -90,6 +92,24 @@ func (c *NFTContract) TotalSupply(ctx context.Context, contractAddress string) (
 		return 0, nil
 	}
 	return n.Uint64(), nil
+}
+
+// CountBurnedFromLogs 通过扫描链上 NFTBurned 事件统计已销毁数量（不依赖合约 burnedCount()）
+func (c *NFTContract) CountBurnedFromLogs(ctx context.Context, contractAddress string, fromBlock uint64) (uint64, error) {
+	if c == nil || c.client == nil || contractAddress == "" {
+		return 0, nil
+	}
+	addr := common.HexToAddress(contractAddress)
+	query := ethereum.FilterQuery{
+		Addresses: []common.Address{addr},
+		Topics:    [][]common.Hash{{nftBurnedEventSig}},
+		FromBlock: new(big.Int).SetUint64(fromBlock),
+	}
+	logs, err := c.client.FilterLogs(ctx, query)
+	if err != nil {
+		return 0, err
+	}
+	return uint64(len(logs)), nil
 }
 
 // NextTokenId 调用 NFTMarketplace 的 nextTokenId()，返回下一个将铸造的 token ID

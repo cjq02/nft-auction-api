@@ -40,15 +40,17 @@ func (h *OverviewHandler) GetOverview(c *gin.Context) {
 		return
 	}
 
-	data := gin.H{
+		data := gin.H{
 		"auction": gin.H{
 			"total":  total,
 			"active": active,
 			"ended":  ended,
 		},
 		"nft": gin.H{
-			"totalSupply": nil,
-			"nextTokenId": nil,
+			"totalSupply":    nil,
+			"burnedCount":    nil,
+			"currentSupply":  nil,
+			"nextTokenId":    nil,
 		},
 	}
 
@@ -58,6 +60,19 @@ func (h *OverviewHandler) GetOverview(c *gin.Context) {
 			h.logger.Warn("获取 NFT totalSupply 失败: %v", err)
 		} else {
 			data["nft"].(gin.H)["totalSupply"] = supply
+		}
+		burned, err := h.nftContract.CountBurnedFromLogs(ctx, h.nftContractAddress, 0)
+		if err != nil {
+			h.logger.Warn("获取 NFT 已销毁数量(事件扫描) 失败: %v", err)
+		} else {
+			data["nft"].(gin.H)["burnedCount"] = burned
+			if supply, ok := data["nft"].(gin.H)["totalSupply"].(uint64); ok {
+				if supply >= burned {
+					data["nft"].(gin.H)["currentSupply"] = supply - burned
+				} else {
+					data["nft"].(gin.H)["currentSupply"] = uint64(0)
+				}
+			}
 		}
 		nextID, err := h.nftContract.NextTokenId(ctx, h.nftContractAddress)
 		if err != nil {

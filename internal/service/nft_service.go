@@ -97,7 +97,7 @@ func (s *NFTService) UpsertMetadata(item *model.NFTMetadata) error {
 		FirstOrCreate(item).Error
 }
 
-// GetNFTsMintedTo 查询铸造给指定地址的所有 NFT（通过链上 NFTMinted 事件日志），分页返回
+// GetNFTsMintedTo 查询铸造给指定地址且当前仍由其持有的 NFT（通过 NFTMinted 事件 + ownerOf 过滤已销毁/已转出），分页返回
 func (s *NFTService) GetNFTsMintedTo(ctx context.Context, contract, owner string, page, limit int) (total uint64, items []MintedNFTItem, err error) {
 	if s.nftContract == nil || contract == "" {
 		return 0, nil, errors.NewNotFoundError("NFT 合约未配置或未指定 contract")
@@ -118,7 +118,20 @@ func (s *NFTService) GetNFTsMintedTo(ctx context.Context, contract, owner string
 		return 0, nil, errors.NewBlockchainError("查询铸造记录失败", err)
 	}
 
-	total = uint64(len(records))
+	// 只保留当前仍由该地址持有的 token（排除已销毁、已转出的）
+	held := make([]blockchain.MintRecord, 0, len(records))
+	for _, rec := range records {
+		currentOwner, err := s.nftContract.OwnerOf(ctx, contract, rec.TokenID)
+		if err != nil {
+			continue // ownerOf 失败多为已销毁
+		}
+		if currentOwner != toAddr {
+			continue // 已转出
+		}
+		held = append(held, rec)
+	}
+
+	total = uint64(len(held))
 	offset := (page - 1) * limit
 	if offset >= int(total) {
 		return total, []MintedNFTItem{}, nil
@@ -127,15 +140,16 @@ func (s *NFTService) GetNFTsMintedTo(ctx context.Context, contract, owner string
 	if end > int(total) {
 		end = int(total)
 	}
+	pageRecords := held[offset:end]
 
-	items = make([]MintedNFTItem, 0, end-offset)
-	ownerAddrs := make([]string, 0, end-offset)
-	for _, rec := range records[offset:end] {
+	items = make([]MintedNFTItem, 0, len(pageRecords))
+	ownerAddrs := make([]string, 0, len(pageRecords))
+	for _, rec := range pageRecords {
 		ownerAddrs = append(ownerAddrs, rec.To.Hex())
 	}
 	nameMap := s.lookupOwnerNames(ownerAddrs)
 
-	for _, rec := range records[offset:end] {
+	for _, rec := range pageRecords {
 		meta, _ := s.GetOrFetchMetadata(ctx, contract, rec.TokenID)
 		item := MintedNFTItem{TokenID: rec.TokenID, Owner: rec.To.Hex()}
 		if n, ok := nameMap[strings.ToLower(rec.To.Hex())]; ok {
