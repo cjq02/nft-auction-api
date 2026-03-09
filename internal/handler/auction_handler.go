@@ -102,7 +102,8 @@ func (h *AuctionHandler) GetByID(c *gin.Context) {
 	var nft *model.NFTMetadata
 	nft, _ = h.nftService.GetOrFetchMetadata(c.Request.Context(), auction.NFTContract, auction.TokenID)
 
-	addrs := make([]string, 0, len(bids))
+	addrs := make([]string, 0, 1+len(bids))
+	addrs = append(addrs, auction.Seller)
 	for _, b := range bids {
 		addrs = append(addrs, b.Bidder)
 	}
@@ -259,6 +260,9 @@ func auctionToResponse(a *model.AuctionIndex, highestBid *model.BidIndex, nft *m
 
 func auctionDetailResponse(a *model.AuctionIndex, highestBid *model.BidIndex, bids []model.BidIndex, nft *model.NFTMetadata, bidderNames map[string]string) gin.H {
 	resp := auctionToResponse(a, highestBid, nft)
+	if n := bidderNames[strings.ToLower(a.Seller)]; n != "" {
+		resp["sellerName"] = n
+	}
 
 	var bidsList []gin.H
 	for _, b := range bids {

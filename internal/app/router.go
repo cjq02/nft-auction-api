@@ -84,6 +84,7 @@ func SetupRouter(
 		nfts := api.Group("/nfts")
 		{
 			nfts.GET("/list", nftHandler.List)
+			nfts.GET("/image", nftHandler.GetImage)
 			nfts.GET("/:contract/:tokenId", nftHandler.GetMetadata)
 		}
 

@@ -1,6 +1,7 @@
 package handler
 
 import (
+	"net/url"
 	"strconv"
 
 	"nft-auction-api/internal/errors"
@@ -50,6 +51,26 @@ func (h *NFTHandler) GetMetadata(c *gin.Context) {
 		"description": metadata.Description,
 		"image":       metadata.Image,
 	})
+}
+
+// GetImage 图片代理：GET /api/nfts/image?u=<url-encoded-uri>，拉取 ipfs/https 图片并缓存，加速前端展示
+func (h *NFTHandler) GetImage(c *gin.Context) {
+	raw := c.Query("u")
+	if raw == "" {
+		response.HandleError(c, h.logger, errors.NewValidationError("缺少参数 u"))
+		return
+	}
+	imageURI, err := url.QueryUnescape(raw)
+	if err != nil {
+		imageURI = raw
+	}
+	data, contentType, err := h.nftService.GetImageProxy(c.Request.Context(), imageURI)
+	if err != nil {
+		response.HandleError(c, h.logger, err)
+		return
+	}
+	c.Header("Cache-Control", "public, max-age=86400")
+	c.Data(200, contentType, data)
 }
 
 // List 已铸造 NFT 列表：GET /api/nfts/list?contract=0x...&owner=0x...&page=1&limit=20

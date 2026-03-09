@@ -14,10 +14,11 @@ import (
 )
 
 type NFTService struct {
-	db           *gorm.DB
-	nftContract  *blockchain.NFTContract
-	fetcher      *metadata.Fetcher
-	nftDeployBlock uint64 // NFT 合约部署块，FilterLogs 从此块开始扫以减轻 RPC 压力，0 表示从创世块
+	db             *gorm.DB
+	nftContract    *blockchain.NFTContract
+	fetcher        *metadata.Fetcher
+	imageCache     *metadata.ImageCache
+	nftDeployBlock uint64
 }
 
 func NewNFTService(db *gorm.DB, nftContract *blockchain.NFTContract, fetcher *metadata.Fetcher, nftDeployBlock uint64) *NFTService {
@@ -25,6 +26,7 @@ func NewNFTService(db *gorm.DB, nftContract *blockchain.NFTContract, fetcher *me
 		db:             db,
 		nftContract:    nftContract,
 		fetcher:        fetcher,
+		imageCache:     metadata.NewImageCache(),
 		nftDeployBlock: nftDeployBlock,
 	}
 }
@@ -103,6 +105,23 @@ func (s *NFTService) UpsertMetadata(item *model.NFTMetadata) error {
 func (s *NFTService) DeleteMetadata(ctx context.Context, nftContract string, tokenID uint64) error {
 	return s.db.WithContext(ctx).Where("nft_contract = ? AND token_id = ?", nftContract, tokenID).
 		Delete(&model.NFTMetadata{}).Error
+}
+
+// GetImageProxy 根据图片 URI（ipfs:// 或 https://）拉取图片并缓存，返回 body 与 Content-Type；用于前端走代理加速
+func (s *NFTService) GetImageProxy(ctx context.Context, imageURI string) ([]byte, string, error) {
+	if s.fetcher == nil || strings.TrimSpace(imageURI) == "" {
+		return nil, "", errors.NewNotFoundError("未配置拉取器或 URI 为空")
+	}
+	resolved := s.fetcher.ResolveURL(imageURI)
+	if data, ct, ok := s.imageCache.Get(resolved); ok {
+		return data, ct, nil
+	}
+	data, ct, err := s.fetcher.FetchImage(resolved)
+	if err != nil {
+		return nil, "", err
+	}
+	s.imageCache.Set(resolved, data, ct)
+	return data, ct, nil
 }
 
 // GetNFTsOwnedBy 查询指定地址当前持有的 NFT，优先读 t_nft_ownership（由索引器维护），分页返回

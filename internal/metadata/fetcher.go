@@ -3,6 +3,7 @@ package metadata
 import (
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"strings"
 	"time"
@@ -88,6 +89,11 @@ func (f *Fetcher) Fetch(tokenURI string) (*ParsedMetadata, error) {
 	return parsed, nil
 }
 
+// ResolveURL 将 ipfs:// 转为网关 HTTP URL，供外部（如图片代理）使用
+func (f *Fetcher) ResolveURL(uri string) string {
+	return f.resolveURL(uri)
+}
+
 // resolveURL 将 ipfs:// 转为网关 URL
 func (f *Fetcher) resolveURL(uri string) string {
 	uri = strings.TrimSpace(uri)
@@ -99,4 +105,26 @@ func (f *Fetcher) resolveURL(uri string) string {
 		return "https://" + uri
 	}
 	return uri
+}
+
+// FetchImage 拉取图片 URL，返回 body 与 Content-Type（用于代理缓存）
+func (f *Fetcher) FetchImage(resolvedURL string) ([]byte, string, error) {
+	req, err := http.NewRequest(http.MethodGet, resolvedURL, nil)
+	if err != nil {
+		return nil, "", err
+	}
+	resp, err := f.HTTPClient.Do(req)
+	if err != nil {
+		return nil, "", err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return nil, "", fmt.Errorf("http status %d", resp.StatusCode)
+	}
+	ct := resp.Header.Get("Content-Type")
+	if ct == "" {
+		ct = "image/png"
+	}
+	body, err := io.ReadAll(resp.Body)
+	return body, ct, err
 }
