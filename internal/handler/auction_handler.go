@@ -108,7 +108,8 @@ func (h *AuctionHandler) GetByID(c *gin.Context) {
 		addrs = append(addrs, b.Bidder)
 	}
 	bidderNames := h.userService.GetUsernamesByAddresses(addrs)
-	response.Success(c, auctionDetailResponse(auction, highestBid, bids, nft, bidderNames))
+	minBidEth, _ := h.auctionService.GetMinBidEth(c.Request.Context(), bidContract, auction.MinBid)
+	response.Success(c, auctionDetailResponse(auction, highestBid, bids, nft, bidderNames, minBidEth))
 }
 
 func (h *AuctionHandler) ListByAddress(c *gin.Context) {
@@ -258,8 +259,11 @@ func auctionToResponse(a *model.AuctionIndex, highestBid *model.BidIndex, nft *m
 	return resp
 }
 
-func auctionDetailResponse(a *model.AuctionIndex, highestBid *model.BidIndex, bids []model.BidIndex, nft *model.NFTMetadata, bidderNames map[string]string) gin.H {
+func auctionDetailResponse(a *model.AuctionIndex, highestBid *model.BidIndex, bids []model.BidIndex, nft *model.NFTMetadata, bidderNames map[string]string, minBidEth string) gin.H {
 	resp := auctionToResponse(a, highestBid, nft)
+	if minBidEth != "" {
+		resp["minBidEth"] = minBidEth
+	}
 	if n := bidderNames[strings.ToLower(a.Seller)]; n != "" {
 		resp["sellerName"] = n
 	}

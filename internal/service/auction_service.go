@@ -3,6 +3,7 @@ package service
 import (
 	"context"
 	"log"
+	"math/big"
 
 	"nft-auction-api/internal/blockchain"
 	"nft-auction-api/internal/errors"
@@ -267,5 +268,21 @@ func (s *AuctionService) IndexFromTxHash(ctx context.Context, txHash string) (*m
 	}
 	log.Printf("[auction_sync] IndexFromTxHash parsed auctionId=%d", auctionID)
 	return s.IndexFromAuctionID(ctx, s.defaultContractAddr, auctionID)
+}
+
+// GetMinBidEth 根据链上价格将 minBid（USD，18 位小数字符串）换算为 ETH 展示字符串。
+// 若链未配置或调用失败则返回空字符串，调用方可不展示 ETH 或做降级。
+func (s *AuctionService) GetMinBidEth(ctx context.Context, auctionContractAddr, minBidUSD string) (string, error) {
+	if s.auctionContract == nil || auctionContractAddr == "" || minBidUSD == "" {
+		return "", nil
+	}
+	minBid := new(big.Int)
+	if _, ok := minBid.SetString(minBidUSD, 10); !ok {
+		return "", nil
+	}
+	if minBid.Sign() <= 0 {
+		return "", nil
+	}
+	return s.auctionContract.GetMinBidEth(ctx, auctionContractAddr, minBid)
 }
 

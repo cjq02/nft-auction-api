@@ -255,3 +255,12 @@ func (c *AuctionContract) GetHighestBid(ctx context.Context, auctionID uint64) (
 
 	return &bid, nil
 }
+
+// GetMinBidEth 根据指定拍卖合约的 Chainlink 价格将 minBid（USD）换算为 ETH 展示字符串。
+// auctionContractAddr 可为任意部署的拍卖合约地址（与 c.address 可不同）。
+func (c *AuctionContract) GetMinBidEth(ctx context.Context, auctionContractAddr string, minBidUSD *big.Int) (string, error) {
+	if c == nil || c.client == nil {
+		return "", fmt.Errorf("blockchain not available")
+	}
+	return GetMinBidEth(ctx, c.client, auctionContractAddr, minBidUSD)
+}
