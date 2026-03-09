@@ -73,7 +73,7 @@ func (h *NFTHandler) List(c *gin.Context) {
 		err   error
 	)
 	if owner != "" {
-		total, items, err = h.nftService.GetNFTsMintedTo(c.Request.Context(), contract, owner, page, limit)
+		total, items, err = h.nftService.GetNFTsOwnedBy(c.Request.Context(), contract, owner, page, limit)
 	} else {
 		total, items, err = h.nftService.ListMintedNFTs(c.Request.Context(), contract, page, limit)
 	}

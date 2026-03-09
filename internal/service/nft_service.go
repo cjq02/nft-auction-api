@@ -2,7 +2,9 @@ package service
 
 import (
 	"context"
+	"sort"
 	"strings"
+	"sync"
 
 	"github.com/ethereum/go-ethereum/common"
 	"gorm.io/gorm"
@@ -14,16 +16,18 @@ import (
 )
 
 type NFTService struct {
-	db          *gorm.DB
-	nftContract *blockchain.NFTContract
-	fetcher     *metadata.Fetcher
+	db           *gorm.DB
+	nftContract  *blockchain.NFTContract
+	fetcher      *metadata.Fetcher
+	nftDeployBlock uint64 // NFT 合约部署块，FilterLogs 从此块开始扫以减轻 RPC 压力，0 表示从创世块
 }
 
-func NewNFTService(db *gorm.DB, nftContract *blockchain.NFTContract, fetcher *metadata.Fetcher) *NFTService {
+func NewNFTService(db *gorm.DB, nftContract *blockchain.NFTContract, fetcher *metadata.Fetcher, nftDeployBlock uint64) *NFTService {
 	return &NFTService{
-		db:          db,
-		nftContract: nftContract,
-		fetcher:     fetcher,
+		db:             db,
+		nftContract:    nftContract,
+		fetcher:        fetcher,
+		nftDeployBlock: nftDeployBlock,
 	}
 }
 
@@ -103,8 +107,8 @@ func (s *NFTService) DeleteMetadata(ctx context.Context, nftContract string, tok
 		Delete(&model.NFTMetadata{}).Error
 }
 
-// GetNFTsMintedTo 查询铸造给指定地址且当前仍由其持有的 NFT（通过 NFTMinted 事件 + ownerOf 过滤已销毁/已转出），分页返回
-func (s *NFTService) GetNFTsMintedTo(ctx context.Context, contract, owner string, page, limit int) (total uint64, items []MintedNFTItem, err error) {
+// GetNFTsOwnedBy 查询指定地址当前持有的 NFT（通过 ERC721 Transfer(to=地址) 事件 + ownerOf 过滤已销毁/已转出），分页返回；含铸造所得与拍卖/转账所得
+func (s *NFTService) GetNFTsOwnedBy(ctx context.Context, contract, owner string, page, limit int) (total uint64, items []MintedNFTItem, err error) {
 	if s.nftContract == nil || contract == "" {
 		return 0, nil, errors.NewNotFoundError("NFT 合约未配置或未指定 contract")
 	}
@@ -119,23 +123,15 @@ func (s *NFTService) GetNFTsMintedTo(ctx context.Context, contract, owner string
 	}
 
 	toAddr := common.HexToAddress(owner)
-	records, err := s.nftContract.GetMintedToAddress(ctx, contract, toAddr)
+	tokenIds, err := s.nftContract.GetTokenIdsTransferredTo(ctx, contract, toAddr, s.nftDeployBlock)
 	if err != nil {
-		return 0, nil, errors.NewBlockchainError("查询铸造记录失败", err)
+		return 0, nil, errors.NewBlockchainError("查询转入记录失败", err)
 	}
 
-	// 只保留当前仍由该地址持有的 token（排除已销毁、已转出的）
-	held := make([]blockchain.MintRecord, 0, len(records))
-	for _, rec := range records {
-		currentOwner, err := s.nftContract.OwnerOf(ctx, contract, rec.TokenID)
-		if err != nil {
-			continue // ownerOf 失败多为已销毁
-		}
-		if currentOwner != toAddr {
-			continue // 已转出
-		}
-		held = append(held, rec)
-	}
+	// 并发调用 ownerOf 只保留当前仍由该地址持有的 token（限制并发数避免 RPC 限流）
+	const ownerOfConcurrency = 10
+	held := resolveHeld(ctx, s.nftContract, contract, toAddr, tokenIds, ownerOfConcurrency)
+	sort.Slice(held, func(i, j int) bool { return held[i] < held[j] })
 
 	total = uint64(len(held))
 	offset := (page - 1) * limit
@@ -148,17 +144,14 @@ func (s *NFTService) GetNFTsMintedTo(ctx context.Context, contract, owner string
 	}
 	pageRecords := held[offset:end]
 
-	items = make([]MintedNFTItem, 0, len(pageRecords))
-	ownerAddrs := make([]string, 0, len(pageRecords))
-	for _, rec := range pageRecords {
-		ownerAddrs = append(ownerAddrs, rec.To.Hex())
-	}
-	nameMap := s.lookupOwnerNames(ownerAddrs)
+	ownerHex := toAddr.Hex()
+	nameMap := s.lookupOwnerNames([]string{ownerHex})
 
-	for _, rec := range pageRecords {
-		meta, _ := s.GetOrFetchMetadata(ctx, contract, rec.TokenID)
-		item := MintedNFTItem{TokenID: rec.TokenID, Owner: rec.To.Hex()}
-		if n, ok := nameMap[strings.ToLower(rec.To.Hex())]; ok {
+	items = make([]MintedNFTItem, 0, len(pageRecords))
+	for _, tokenID := range pageRecords {
+		meta, _ := s.GetOrFetchMetadata(ctx, contract, tokenID)
+		item := MintedNFTItem{TokenID: tokenID, Owner: ownerHex}
+		if n, ok := nameMap[strings.ToLower(ownerHex)]; ok {
 			item.OwnerName = &n
 		}
 		if meta != nil {
@@ -171,6 +164,42 @@ func (s *NFTService) GetNFTsMintedTo(ctx context.Context, contract, owner string
 	}
 	return total, items, nil
 }
+
+// resolveHeld 并发对 tokenIds 调用 ownerOf，只保留当前仍由 toAddr 持有的 tokenId，并发数由 concurrency 限制
+func resolveHeld(ctx context.Context, nftContract *blockchain.NFTContract, contract string, toAddr common.Address, tokenIds []uint64, concurrency int) []uint64 {
+	if nftContract == nil || len(tokenIds) == 0 {
+		return nil
+	}
+	if concurrency <= 0 {
+		concurrency = 1
+	}
+	sem := make(chan struct{}, concurrency)
+	var wg sync.WaitGroup
+	type result struct {
+		tokenID uint64
+		held    bool
+	}
+	ch := make(chan result, len(tokenIds))
+	for _, tokenID := range tokenIds {
+		wg.Add(1)
+		go func(id uint64) {
+			defer wg.Done()
+			sem <- struct{}{}
+			defer func() { <-sem }()
+			owner, err := nftContract.OwnerOf(ctx, contract, id)
+			ch <- result{id, err == nil && owner == toAddr}
+		}(tokenID)
+	}
+	go func() { wg.Wait(); close(ch) }()
+	held := make([]uint64, 0, len(tokenIds))
+	for r := range ch {
+		if r.held {
+			held = append(held, r.tokenID)
+		}
+	}
+	return held
+}
+
 type MintedNFTItem struct {
 	TokenID     uint64  `json:"tokenId"`
 	Owner       string  `json:"owner"`

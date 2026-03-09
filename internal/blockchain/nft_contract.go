@@ -24,6 +24,8 @@ const erc721TokenURIABI = `[
 var nftMintedEventSig = crypto.Keccak256Hash([]byte("NFTMinted(address,uint256,string)"))
 // nftBurnedEventSig NFTBurned(uint256 indexed tokenId) 的 keccak256 签名，用于统计已销毁数量
 var nftBurnedEventSig = crypto.Keccak256Hash([]byte("NFTBurned(uint256)"))
+// erc721TransferEventSig ERC721 Transfer(address,address,uint256) 的 keccak256，用于查「曾转入某地址」的 token（含拍卖获得）
+var erc721TransferEventSig = crypto.Keccak256Hash([]byte("Transfer(address,address,uint256)"))
 
 // NFTContract 用于调用任意 ERC721 的 tokenURI
 type NFTContract struct {
@@ -199,4 +201,43 @@ func (c *NFTContract) GetMintedToAddress(ctx context.Context, contractAddress st
 		})
 	}
 	return records, nil
+}
+
+// GetTokenIdsTransferredTo 查询指定合约中曾通过 Transfer 事件转入 toAddress 的所有 tokenId（含铸造、拍卖/转账转入）。
+// fromBlock 为 0 时从创世块扫；>0 时从该块开始扫，建议传 NFT 合约部署块以减轻 RPC 压力。
+func (c *NFTContract) GetTokenIdsTransferredTo(ctx context.Context, contractAddress string, toAddress common.Address, fromBlock uint64) ([]uint64, error) {
+	if c == nil || c.client == nil || contractAddress == "" {
+		return nil, nil
+	}
+	addr := common.HexToAddress(contractAddress)
+	toTopic := common.BytesToHash(toAddress.Bytes())
+	query := ethereum.FilterQuery{
+		Addresses: []common.Address{addr},
+		Topics:    [][]common.Hash{{erc721TransferEventSig}, nil, {toTopic}, nil},
+	}
+	if fromBlock > 0 {
+		query.FromBlock = new(big.Int).SetUint64(fromBlock)
+	}
+	logs, err := c.client.FilterLogs(ctx, query)
+	if err != nil {
+		return nil, err
+	}
+	seen := make(map[uint64]struct{})
+	ids := make([]uint64, 0, len(logs))
+	for _, log := range logs {
+		if len(log.Topics) < 4 {
+			continue
+		}
+		tokenID := new(big.Int).SetBytes(log.Topics[3].Bytes())
+		if !tokenID.IsUint64() {
+			continue
+		}
+		id := tokenID.Uint64()
+		if _, ok := seen[id]; ok {
+			continue
+		}
+		seen[id] = struct{}{}
+		ids = append(ids, id)
+	}
+	return ids, nil
 }

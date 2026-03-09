@@ -81,7 +81,7 @@ func main() {
 	userService := service.NewUserService(db.DB)
 	auctionService := service.NewAuctionService(db.DB, auctionContract, bcConfig.AuctionContractAddress)
 	bidService := service.NewBidService(db.DB)
-	nftService := service.NewNFTService(db.DB, nftContract, metadataFetcher)
+	nftService := service.NewNFTService(db.DB, nftContract, metadataFetcher, bcConfig.NFTDeployBlock)
 
 	// WebSocket client — for event listener (SubscribeFilterLogs)
 	// Run in a separate goroutine; cancelled via context on shutdown.
