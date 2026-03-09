@@ -2,6 +2,7 @@ package handler
 
 import (
 	"strconv"
+	"strings"
 
 	"nft-auction-api/internal/errors"
 	"nft-auction-api/internal/logger"
@@ -13,18 +14,20 @@ import (
 )
 
 type AuctionHandler struct {
-	auctionService       *service.AuctionService
-	bidService           *service.BidService
-	nftService           *service.NFTService
-	backfillStartBlock   uint64
-	defaultContractAddr  string // 默认拍卖合约，用于 Backfill 与 ListBids 时解析空 contract
-	logger               *logger.Logger
+	auctionService      *service.AuctionService
+	bidService          *service.BidService
+	nftService          *service.NFTService
+	userService         *service.UserService
+	backfillStartBlock  uint64
+	defaultContractAddr string // 默认拍卖合约，用于 Backfill 与 ListBids 时解析空 contract
+	logger              *logger.Logger
 }
 
 func NewAuctionHandler(
 	auctionService *service.AuctionService,
 	bidService *service.BidService,
 	nftService *service.NFTService,
+	userService *service.UserService,
 	backfillStartBlock uint64,
 	defaultContractAddr string,
 	appLogger *logger.Logger,
@@ -33,6 +36,7 @@ func NewAuctionHandler(
 		auctionService:      auctionService,
 		bidService:          bidService,
 		nftService:          nftService,
+		userService:         userService,
 		backfillStartBlock:  backfillStartBlock,
 		defaultContractAddr: defaultContractAddr,
 		logger:              appLogger,
@@ -98,7 +102,12 @@ func (h *AuctionHandler) GetByID(c *gin.Context) {
 	var nft *model.NFTMetadata
 	nft, _ = h.nftService.GetOrFetchMetadata(c.Request.Context(), auction.NFTContract, auction.TokenID)
 
-	response.Success(c, auctionDetailResponse(auction, highestBid, bids, nft))
+	addrs := make([]string, 0, len(bids))
+	for _, b := range bids {
+		addrs = append(addrs, b.Bidder)
+	}
+	bidderNames := h.userService.GetUsernamesByAddresses(addrs)
+	response.Success(c, auctionDetailResponse(auction, highestBid, bids, nft, bidderNames))
 }
 
 func (h *AuctionHandler) ListByAddress(c *gin.Context) {
@@ -155,15 +164,25 @@ func (h *AuctionHandler) ListBids(c *gin.Context) {
 		return
 	}
 
+	addrs := make([]string, 0, len(bids))
+	for _, b := range bids {
+		addrs = append(addrs, b.Bidder)
+	}
+	names := h.userService.GetUsernamesByAddresses(addrs)
+
 	var list []gin.H
 	for _, b := range bids {
-		list = append(list, gin.H{
+		item := gin.H{
 			"bidder":     b.Bidder,
 			"amount":     b.Amount,
 			"timestamp":  b.BidTimestamp,
 			"isEth":      b.IsETH,
 			"createdAt":  b.CreatedAt,
-		})
+		}
+		if n := names[strings.ToLower(b.Bidder)]; n != "" {
+			item["bidderName"] = n
+		}
+		list = append(list, item)
 	}
 
 	response.Success(c, gin.H{"bids": list})
@@ -238,17 +257,21 @@ func auctionToResponse(a *model.AuctionIndex, highestBid *model.BidIndex, nft *m
 	return resp
 }
 
-func auctionDetailResponse(a *model.AuctionIndex, highestBid *model.BidIndex, bids []model.BidIndex, nft *model.NFTMetadata) gin.H {
+func auctionDetailResponse(a *model.AuctionIndex, highestBid *model.BidIndex, bids []model.BidIndex, nft *model.NFTMetadata, bidderNames map[string]string) gin.H {
 	resp := auctionToResponse(a, highestBid, nft)
 
 	var bidsList []gin.H
 	for _, b := range bids {
-		bidsList = append(bidsList, gin.H{
+		item := gin.H{
 			"bidder":    b.Bidder,
 			"amount":    b.Amount,
 			"timestamp": b.BidTimestamp,
 			"isEth":     b.IsETH,
-		})
+		}
+		if n := bidderNames[strings.ToLower(b.Bidder)]; n != "" {
+			item["bidderName"] = n
+		}
+		bidsList = append(bidsList, item)
 	}
 	resp["bids"] = bidsList
 

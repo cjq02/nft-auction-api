@@ -89,6 +89,26 @@ func (s *UserService) GetByID(id uint) (*model.User, error) {
 	return &user, nil
 }
 
+// GetUsernamesByAddresses 批量根据钱包地址查用户名，返回 map[小写地址]用户名，未注册的地址不在 map 中
+func (s *UserService) GetUsernamesByAddresses(addresses []string) map[string]string {
+	if len(addresses) == 0 {
+		return nil
+	}
+	lowered := make([]string, len(addresses))
+	for i, a := range addresses {
+		lowered[i] = strings.ToLower(a)
+	}
+	var users []model.User
+	if err := s.db.Select("wallet_address", "username").Where("LOWER(wallet_address) IN ?", lowered).Find(&users).Error; err != nil {
+		return nil
+	}
+	m := make(map[string]string, len(users))
+	for _, u := range users {
+		m[strings.ToLower(u.WalletAddress)] = u.Username
+	}
+	return m
+}
+
 // List 返回所有用户（仅 id、username、wallet_address），供铸造页下拉等使用
 func (s *UserService) List() ([]*model.UserResponse, error) {
 	var users []model.User

@@ -43,7 +43,7 @@ func SetupRouter(
 	authMiddleware := middleware.NewAuthMiddleware(secretKey)
 
 	userHandler := handler.NewUserHandler(userService, jwtService, appLogger)
-	auctionHandler := handler.NewAuctionHandler(auctionService, bidService, nftService, backfillStartBlock, defaultAuctionContractAddress, appLogger)
+	auctionHandler := handler.NewAuctionHandler(auctionService, bidService, nftService, userService, backfillStartBlock, defaultAuctionContractAddress, appLogger)
 	nftHandler := handler.NewNFTHandler(nftService, nftContractAddress, appLogger)
 	overviewHandler := handler.NewOverviewHandler(db, auctionService, nftContract, nftContractAddress, appLogger)
 
