@@ -2,9 +2,7 @@ package service
 
 import (
 	"context"
-	"sort"
 	"strings"
-	"sync"
 
 	"github.com/ethereum/go-ethereum/common"
 	"gorm.io/gorm"
@@ -107,10 +105,10 @@ func (s *NFTService) DeleteMetadata(ctx context.Context, nftContract string, tok
 		Delete(&model.NFTMetadata{}).Error
 }
 
-// GetNFTsOwnedBy 查询指定地址当前持有的 NFT（通过 ERC721 Transfer(to=地址) 事件 + ownerOf 过滤已销毁/已转出），分页返回；含铸造所得与拍卖/转账所得
+// GetNFTsOwnedBy 查询指定地址当前持有的 NFT，优先读 t_nft_ownership（由索引器维护），分页返回
 func (s *NFTService) GetNFTsOwnedBy(ctx context.Context, contract, owner string, page, limit int) (total uint64, items []MintedNFTItem, err error) {
-	if s.nftContract == nil || contract == "" {
-		return 0, nil, errors.NewNotFoundError("NFT 合约未配置或未指定 contract")
+	if contract == "" {
+		return 0, nil, errors.NewNotFoundError("未指定 contract")
 	}
 	if page < 1 {
 		page = 1
@@ -122,82 +120,46 @@ func (s *NFTService) GetNFTsOwnedBy(ctx context.Context, contract, owner string,
 		limit = 100
 	}
 
-	toAddr := common.HexToAddress(owner)
-	tokenIds, err := s.nftContract.GetTokenIdsTransferredTo(ctx, contract, toAddr, s.nftDeployBlock)
-	if err != nil {
-		return 0, nil, errors.NewBlockchainError("查询转入记录失败", err)
+	ownerLower := strings.ToLower(owner)
+	var totalCount int64
+	if err := s.db.WithContext(ctx).Model(&model.NftOwnership{}).
+		Where("nft_contract = ? AND LOWER(owner_address) = ?", contract, ownerLower).
+		Count(&totalCount).Error; err != nil {
+		return 0, nil, errors.NewDatabaseError(err)
 	}
-
-	// 并发调用 ownerOf 只保留当前仍由该地址持有的 token（限制并发数避免 RPC 限流）
-	const ownerOfConcurrency = 10
-	held := resolveHeld(ctx, s.nftContract, contract, toAddr, tokenIds, ownerOfConcurrency)
-	sort.Slice(held, func(i, j int) bool { return held[i] < held[j] })
-
-	total = uint64(len(held))
+	total = uint64(totalCount)
 	offset := (page - 1) * limit
-	if offset >= int(total) {
+	if total == 0 || int64(offset) >= totalCount {
 		return total, []MintedNFTItem{}, nil
 	}
-	end := offset + limit
-	if end > int(total) {
-		end = int(total)
+
+	var rows []model.NftOwnership
+	if err := s.db.WithContext(ctx).Where("nft_contract = ? AND LOWER(owner_address) = ?", contract, ownerLower).
+		Order("token_id").
+		Offset(offset).Limit(limit).
+		Find(&rows).Error; err != nil {
+		return 0, nil, errors.NewDatabaseError(err)
 	}
-	pageRecords := held[offset:end]
 
-	ownerHex := toAddr.Hex()
-	nameMap := s.lookupOwnerNames([]string{ownerHex})
-
-	items = make([]MintedNFTItem, 0, len(pageRecords))
-	for _, tokenID := range pageRecords {
-		meta, _ := s.GetOrFetchMetadata(ctx, contract, tokenID)
-		item := MintedNFTItem{TokenID: tokenID, Owner: ownerHex}
-		if n, ok := nameMap[strings.ToLower(ownerHex)]; ok {
+	nameMap := s.lookupOwnerNames([]string{owner})
+	items = make([]MintedNFTItem, 0, len(rows))
+	for _, row := range rows {
+		item := MintedNFTItem{TokenID: row.TokenID, Owner: row.OwnerAddress}
+		if n, ok := nameMap[strings.ToLower(row.OwnerAddress)]; ok {
 			item.OwnerName = &n
 		}
-		if meta != nil {
-			item.TokenURI = meta.TokenURI
-			item.Name = meta.Name
-			item.Description = meta.Description
-			item.Image = meta.Image
+		if s.nftContract != nil {
+			meta, _ := s.GetOrFetchMetadata(ctx, contract, row.TokenID)
+			if meta != nil {
+				item.TokenURI = meta.TokenURI
+				item.Name = meta.Name
+				item.Description = meta.Description
+				item.Image = meta.Image
+			}
 		}
 		items = append(items, item)
 	}
 	return total, items, nil
-}
-
-// resolveHeld 并发对 tokenIds 调用 ownerOf，只保留当前仍由 toAddr 持有的 tokenId，并发数由 concurrency 限制
-func resolveHeld(ctx context.Context, nftContract *blockchain.NFTContract, contract string, toAddr common.Address, tokenIds []uint64, concurrency int) []uint64 {
-	if nftContract == nil || len(tokenIds) == 0 {
-		return nil
-	}
-	if concurrency <= 0 {
-		concurrency = 1
-	}
-	sem := make(chan struct{}, concurrency)
-	var wg sync.WaitGroup
-	type result struct {
-		tokenID uint64
-		held    bool
-	}
-	ch := make(chan result, len(tokenIds))
-	for _, tokenID := range tokenIds {
-		wg.Add(1)
-		go func(id uint64) {
-			defer wg.Done()
-			sem <- struct{}{}
-			defer func() { <-sem }()
-			owner, err := nftContract.OwnerOf(ctx, contract, id)
-			ch <- result{id, err == nil && owner == toAddr}
-		}(tokenID)
-	}
-	go func() { wg.Wait(); close(ch) }()
-	held := make([]uint64, 0, len(tokenIds))
-	for r := range ch {
-		if r.held {
-			held = append(held, r.tokenID)
-		}
-	}
-	return held
 }
 
 type MintedNFTItem struct {

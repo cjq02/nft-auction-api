@@ -160,5 +160,6 @@ func autoMigrate(db *gorm.DB) error {
 		&model.BidIndex{},
 		&model.NFTMetadata{},
 		&model.IndexerState{},
+		&model.NftOwnership{},
 	)
 }

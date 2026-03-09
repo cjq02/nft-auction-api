@@ -32,6 +32,8 @@ type NFTBurnedEvent struct {
 type NFTEventHandlers struct {
 	OnNFTMinted func(ctx context.Context, e NFTMintedEvent)
 	OnNFTBurned func(ctx context.Context, e NFTBurnedEvent)
+	// OnTransfer ERC721 Transfer(from, to, tokenId)；铸造/转账/销毁都会触发，用于维护 t_nft_ownership
+	OnTransfer func(ctx context.Context, from, to common.Address, tokenID uint64)
 }
 
 // -------- NFTEventListener --------
@@ -104,6 +106,7 @@ func (l *NFTEventListener) session(ctx context.Context, fromBlock uint64, onBloc
 		Topics: [][]common.Hash{{
 			nftMintedEventSig,
 			nftBurnedEventSig,
+			erc721TransferEventSig,
 		}},
 	}
 
@@ -147,6 +150,7 @@ func (l *NFTEventListener) backfill(ctx context.Context, from, to uint64, onBloc
 		Topics: [][]common.Hash{{
 			nftMintedEventSig,
 			nftBurnedEventSig,
+			erc721TransferEventSig,
 		}},
 	}
 
@@ -193,7 +197,23 @@ func (l *NFTEventListener) dispatchLog(ctx context.Context, lg types.Log) {
 		l.handleNFTMinted(ctx, lg)
 	case nftBurnedEventSig:
 		l.handleNFTBurned(ctx, lg)
+	case erc721TransferEventSig:
+		l.handleTransfer(ctx, lg)
 	}
+}
+
+// Transfer(address indexed from, address indexed to, uint256 indexed tokenId) — topics[1]=from, [2]=to, [3]=tokenId
+func (l *NFTEventListener) handleTransfer(ctx context.Context, lg types.Log) {
+	if len(lg.Topics) < 4 || l.handlers.OnTransfer == nil {
+		return
+	}
+	from := common.BytesToAddress(lg.Topics[1].Bytes())
+	to := common.BytesToAddress(lg.Topics[2].Bytes())
+	tokenID := new(big.Int).SetBytes(lg.Topics[3].Bytes())
+	if !tokenID.IsUint64() {
+		return
+	}
+	l.handlers.OnTransfer(ctx, from, to, tokenID.Uint64())
 }
 
 // NFTMinted(address indexed to, uint256 indexed tokenId, string tokenURI)
