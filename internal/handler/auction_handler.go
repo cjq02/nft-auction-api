@@ -59,11 +59,27 @@ func (h *AuctionHandler) List(c *gin.Context) {
 		h.logger.Info("auction_list empty page=%d limit=%d status=%s (DB has no matching records)", page, limit, status)
 	}
 
-	// 列表响应：附带 NFT 元数据（优先读 DB 缓存，首次从链上/IPFS 获取）
+	// 批量查卖家账户名称
+	sellerAddrs := make([]string, 0, len(items))
+	seen := make(map[string]struct{})
+	for _, item := range items {
+		lower := strings.ToLower(item.Seller)
+		if _, ok := seen[lower]; !ok {
+			seen[lower] = struct{}{}
+			sellerAddrs = append(sellerAddrs, item.Seller)
+		}
+	}
+	sellerNames := h.userService.GetUsernamesByAddresses(sellerAddrs)
+
+	// 列表响应：附带 NFT 元数据与卖家名称
 	var list []gin.H
 	for _, item := range items {
 		nft, _ := h.nftService.GetOrFetchMetadata(c.Request.Context(), item.NFTContract, item.TokenID)
-		list = append(list, auctionToResponse(&item, nil, nft))
+		resp := auctionToResponse(&item, nil, nft)
+		if n := sellerNames[strings.ToLower(item.Seller)]; n != "" {
+			resp["sellerName"] = n
+		}
+		list = append(list, resp)
 	}
 
 	response.Success(c, gin.H{
