@@ -108,7 +108,10 @@ func (h *AuctionHandler) GetByID(c *gin.Context) {
 		addrs = append(addrs, b.Bidder)
 	}
 	bidderNames := h.userService.GetUsernamesByAddresses(addrs)
-	minBidEth, _ := h.auctionService.GetMinBidEth(c.Request.Context(), bidContract, auction.MinBid)
+	var minBidEth string
+	if auction.PaymentToken == nil || *auction.PaymentToken == "" || *auction.PaymentToken == "0x0000000000000000000000000000000000000000" {
+		minBidEth, _ = h.auctionService.GetMinBidEth(c.Request.Context(), bidContract, auction.MinBid)
+	}
 	response.Success(c, auctionDetailResponse(auction, highestBid, bids, nft, bidderNames, minBidEth))
 }
 
