@@ -124,6 +124,21 @@ func (s *NFTService) GetImageProxy(ctx context.Context, imageURI string) ([]byte
 	return data, ct, nil
 }
 
+// CountByOwner 返回指定地址在指定合约下持有的 NFT 数量（读 t_nft_ownership）
+func (s *NFTService) CountByOwner(ctx context.Context, contract, owner string) (uint64, error) {
+	if contract == "" {
+		return 0, errors.NewNotFoundError("未指定 contract")
+	}
+	ownerLower := strings.ToLower(owner)
+	var count int64
+	if err := s.db.WithContext(ctx).Model(&model.NftOwnership{}).
+		Where("nft_contract = ? AND LOWER(owner_address) = ?", contract, ownerLower).
+		Count(&count).Error; err != nil {
+		return 0, errors.NewDatabaseError(err)
+	}
+	return uint64(count), nil
+}
+
 // GetNFTsOwnedBy 查询指定地址当前持有的 NFT，优先读 t_nft_ownership（由索引器维护），分页返回
 func (s *NFTService) GetNFTsOwnedBy(ctx context.Context, contract, owner string, page, limit int) (total uint64, items []MintedNFTItem, err error) {
 	if contract == "" {

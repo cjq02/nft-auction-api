@@ -11,16 +11,32 @@ import (
 )
 
 type UserHandler struct {
-	userService *service.UserService
-	jwtService  *service.JWTService
-	logger      *logger.Logger
+	userService         *service.UserService
+	jwtService          *service.JWTService
+	auctionService      *service.AuctionService
+	nftService          *service.NFTService
+	nftContractAddress  string
+	auctionContractAddr string
+	logger              *logger.Logger
 }
 
-func NewUserHandler(userService *service.UserService, jwtService *service.JWTService, appLogger *logger.Logger) *UserHandler {
+func NewUserHandler(
+	userService *service.UserService,
+	jwtService *service.JWTService,
+	auctionService *service.AuctionService,
+	nftService *service.NFTService,
+	nftContractAddress string,
+	auctionContractAddr string,
+	appLogger *logger.Logger,
+) *UserHandler {
 	return &UserHandler{
-		userService: userService,
-		jwtService:  jwtService,
-		logger:      appLogger,
+		userService:         userService,
+		jwtService:          jwtService,
+		auctionService:      auctionService,
+		nftService:          nftService,
+		nftContractAddress:  nftContractAddress,
+		auctionContractAddr: auctionContractAddr,
+		logger:              appLogger,
 	}
 }
 
@@ -108,11 +124,37 @@ func (h *UserHandler) Logout(c *gin.Context) {
 	response.SuccessWithMessage(c, gin.H{}, "退出登录成功")
 }
 
-// List 用户列表（用户名+钱包地址），供铸造 NFT 等下拉选择
+// List 用户列表（用户名+钱包地址）；若配置了 NFT/拍卖合约，则附带每用户的 nftCount、auctionCount（正在拍卖数）
 func (h *UserHandler) List(c *gin.Context) {
 	list, err := h.userService.List()
 	if err != nil {
 		response.HandleError(c, h.logger, err)
+		return
+	}
+	ctx := c.Request.Context()
+	withStats := h.nftContractAddress != "" && h.auctionContractAddr != ""
+	if withStats {
+		out := make([]gin.H, 0, len(list))
+		for _, u := range list {
+			item := gin.H{
+				"id":             u.ID,
+				"username":       u.Username,
+				"email":          u.Email,
+				"walletAddress":  u.WalletAddress,
+				"createdAt":      u.CreatedAt,
+				"updatedAt":      u.UpdatedAt,
+			}
+			nftCount, errNft := h.nftService.CountByOwner(ctx, h.nftContractAddress, u.WalletAddress)
+			if errNft == nil {
+				item["nftCount"] = nftCount
+			}
+			auctionCount, errAuc := h.auctionService.CountActiveBySeller(u.WalletAddress, h.auctionContractAddr)
+			if errAuc == nil {
+				item["auctionCount"] = auctionCount
+			}
+			out = append(out, item)
+		}
+		response.Success(c, gin.H{"list": out})
 		return
 	}
 	response.Success(c, gin.H{"list": list})

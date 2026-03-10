@@ -137,6 +137,20 @@ func (s *AuctionService) chainInfoToIndex(auctionID uint64, info *blockchain.Auc
 	}
 }
 
+// CountActiveBySeller 返回某卖家当前进行中的拍卖数量（status=Active）
+func (s *AuctionService) CountActiveBySeller(seller string, contractFilter string) (int64, error) {
+	contract := s.resolveContract(contractFilter)
+	query := s.db.Model(&model.AuctionIndex{}).Where("seller = ? AND status = ?", seller, model.AuctionStatusActive)
+	if contract != "" {
+		query = query.Where("auction_contract = ?", contract)
+	}
+	var count int64
+	if err := query.Count(&count).Error; err != nil {
+		return 0, errors.NewDatabaseError(err)
+	}
+	return count, nil
+}
+
 func (s *AuctionService) ListBySeller(seller string, page, limit int, contractFilter string) ([]model.AuctionIndex, int64, error) {
 	var items []model.AuctionIndex
 	var total int64
