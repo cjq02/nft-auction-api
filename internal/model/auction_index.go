@@ -24,6 +24,8 @@ type AuctionIndex struct {
 	MinBid          string        `json:"minBid" gorm:"column:min_bid;size:78;not null"`
 	PaymentToken    *string       `json:"paymentToken,omitempty" gorm:"column:payment_token;size:42"`
 	Status          AuctionStatus `json:"status" gorm:"size:20;not null;default:Active"`
+	FeeAmount       *string       `json:"feeAmount,omitempty" gorm:"column:fee_amount;size:78"`   // 该场拍卖收取的手续费（wei/最小单位），仅 Ended 且有成交时有值
+	FeeIsETH        *bool         `json:"feeIsETH,omitempty" gorm:"column:fee_is_eth"`            // 手续费是否为 ETH
 	CreatedAt       time.Time     `json:"createdAt"`
 	UpdatedAt       time.Time     `json:"updatedAt"`
 }

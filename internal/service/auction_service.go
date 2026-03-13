@@ -61,7 +61,7 @@ func (s *AuctionService) StatsForActive(contractFilter string) (totalAuctions, b
 		return 0, 0, nil, errors.NewDatabaseError(err)
 	}
 
-	// 每个进行中拍卖的最高出价（MySQL 5.7 兼容：用 GROUP BY + MAX，不用窗口函数）
+	// 每个进行中拍卖的最高出价（仅统计 ETH 拍卖，确保单位为 wei→ETH；MySQL 5.7 兼容：用 GROUP BY + MAX，不用窗口函数）
 	type HighestBidRow struct {
 		AuctionID uint64
 		Amount    string
@@ -71,6 +71,7 @@ func (s *AuctionService) StatsForActive(contractFilter string) (totalAuctions, b
 	q := s.db.Table("t_bid_index b").
 		Select("b.auction_id, MAX(b.amount) AS amount").
 		Joins("INNER JOIN t_auction_index a ON a.auction_id = b.auction_id AND a.auction_contract = b.auction_contract AND a.status = ?", model.AuctionStatusActive).
+		Where("b.is_eth = ?", true). // 只统计 ETH 出价，避免将 ERC20 金额当作 ETH
 		Group("b.auction_id")
 	if contract != "" {
 		q = q.Where("b.auction_contract = ?", contract)
@@ -235,6 +236,13 @@ func (s *AuctionService) CreateIndex(item *model.AuctionIndex) error {
 func (s *AuctionService) UpdateStatus(contractAddress string, auctionID uint64, status model.AuctionStatus) error {
 	contractAddress = s.resolveContract(contractAddress)
 	return s.db.Model(&model.AuctionIndex{}).Where("auction_id = ? AND auction_contract = ?", auctionID, contractAddress).Update("status", status).Error
+}
+
+// UpdateFeeCollected 更新某场拍卖的手续费（由 FeeCollected 事件触发）
+func (s *AuctionService) UpdateFeeCollected(contractAddress string, auctionID uint64, feeAmount string, feeIsETH bool) error {
+	contractAddress = s.resolveContract(contractAddress)
+	updates := map[string]interface{}{"fee_amount": feeAmount, "fee_is_eth": feeIsETH}
+	return s.db.Model(&model.AuctionIndex{}).Where("auction_id = ? AND auction_contract = ?", auctionID, contractAddress).Updates(updates).Error
 }
 
 // BackfillResult 补录结果

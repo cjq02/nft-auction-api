@@ -51,12 +51,23 @@ type AuctionCancelledEvent struct {
 	TxHash      string
 }
 
+// FeeCollectedEvent 手续费收取事件（与合约 FeeCollected 一致）
+type FeeCollectedEvent struct {
+	AuctionID   uint64
+	Recipient   common.Address
+	Amount      *big.Int
+	IsETH       bool
+	BlockNumber uint64
+	TxHash      string
+}
+
 // EventHandlers holds callbacks for each event type; nil callbacks are skipped.
 type EventHandlers struct {
 	OnAuctionCreated   func(ctx context.Context, e AuctionCreatedEvent)
 	OnBidPlaced        func(ctx context.Context, e BidPlacedEvent)
 	OnAuctionEnded     func(ctx context.Context, e AuctionEndedEvent)
 	OnAuctionCancelled func(ctx context.Context, e AuctionCancelledEvent)
+	OnFeeCollected     func(ctx context.Context, e FeeCollectedEvent)
 }
 
 // -------- event topic hashes --------
@@ -70,6 +81,8 @@ var (
 	auctionEndedTopic = crypto.Keccak256Hash([]byte("AuctionEnded(uint256,address,uint256)"))
 	// AuctionCancelled(uint256 indexed)
 	auctionCancelledTopic = crypto.Keccak256Hash([]byte("AuctionCancelled(uint256)"))
+	// FeeCollected(uint256 indexed auctionId, address indexed recipient, uint256 amount, bool isETH)
+	feeCollectedTopic = crypto.Keccak256Hash([]byte("FeeCollected(uint256,address,uint256,bool)"))
 )
 
 // -------- EventListener --------
@@ -159,6 +172,7 @@ func (l *EventListener) session(ctx context.Context, fromBlock uint64, onBlockPr
 			bidPlacedTopic,
 			auctionEndedTopic,
 			auctionCancelledTopic,
+			feeCollectedTopic,
 		}},
 	}
 
@@ -205,6 +219,7 @@ func (l *EventListener) backfill(ctx context.Context, from, to uint64, onBlockPr
 			bidPlacedTopic,
 			auctionEndedTopic,
 			auctionCancelledTopic,
+			feeCollectedTopic,
 		}},
 	}
 
@@ -259,6 +274,8 @@ func (l *EventListener) dispatchLog(ctx context.Context, lg types.Log) {
 		l.handleAuctionEnded(ctx, lg)
 	case auctionCancelledTopic:
 		l.handleAuctionCancelled(ctx, lg)
+	case feeCollectedTopic:
+		l.handleFeeCollected(ctx, lg)
 	}
 }
 
@@ -351,6 +368,26 @@ func (l *EventListener) handleAuctionCancelled(ctx context.Context, lg types.Log
 	}
 	l.handlers.OnAuctionCancelled(ctx, AuctionCancelledEvent{
 		AuctionID:   new(big.Int).SetBytes(lg.Topics[1].Bytes()).Uint64(),
+		BlockNumber: lg.BlockNumber,
+		TxHash:      lg.TxHash.Hex(),
+	})
+}
+
+// FeeCollected: topics[1]=auctionId, topics[2]=recipient; data=amount(32), isETH(32)
+func (l *EventListener) handleFeeCollected(ctx context.Context, lg types.Log) {
+	if len(lg.Topics) < 3 || len(lg.Data) < 64 {
+		log.Printf("[event_listener] FeeCollected malformed tx=%s", lg.TxHash.Hex())
+		return
+	}
+	if l.handlers.OnFeeCollected == nil {
+		return
+	}
+	isETH := len(lg.Data) >= 64 && lg.Data[63] != 0
+	l.handlers.OnFeeCollected(ctx, FeeCollectedEvent{
+		AuctionID:   new(big.Int).SetBytes(lg.Topics[1].Bytes()).Uint64(),
+		Recipient:   common.BytesToAddress(lg.Topics[2].Bytes()),
+		Amount:      new(big.Int).SetBytes(lg.Data[0:32]),
+		IsETH:       isETH,
 		BlockNumber: lg.BlockNumber,
 		TxHash:      lg.TxHash.Hex(),
 	})

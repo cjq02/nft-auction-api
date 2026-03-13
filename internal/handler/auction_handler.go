@@ -71,11 +71,19 @@ func (h *AuctionHandler) List(c *gin.Context) {
 	}
 	sellerNames := h.userService.GetUsernamesByAddresses(sellerAddrs)
 
+	// 批量查最高出价（仅对当前列表中的拍卖）
+	auctionIDs := make([]uint64, 0, len(items))
+	for _, item := range items {
+		auctionIDs = append(auctionIDs, item.AuctionID)
+	}
+	// 列表接口中的最高出价主要用于前端展示；当未指定 contract 时，使用默认合约地址
+	highestByID, _ := h.bidService.GetHighestBidsForAuctions(auctionIDs, contract)
+
 	// 列表响应：附带 NFT 元数据与卖家名称
 	var list []gin.H
 	for _, item := range items {
 		nft, _ := h.nftService.GetOrFetchMetadata(c.Request.Context(), item.NFTContract, item.TokenID)
-		resp := auctionToResponse(&item, nil, nft)
+		resp := auctionToResponse(&item, highestByID[item.AuctionID], nft)
 		if n := sellerNames[strings.ToLower(item.Seller)]; n != "" {
 			resp["sellerName"] = n
 		}

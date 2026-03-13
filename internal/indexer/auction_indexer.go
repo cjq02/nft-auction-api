@@ -49,6 +49,7 @@ func NewAuctionIndexer(
 		OnBidPlaced:        idx.onBidPlaced,
 		OnAuctionEnded:     idx.onAuctionEnded,
 		OnAuctionCancelled: idx.onAuctionCancelled,
+		OnFeeCollected:     idx.onFeeCollected,
 	}
 	idx.listener = blockchain.NewEventListener(wsClient, contractAddress, handlers)
 	return idx
@@ -131,6 +132,14 @@ func (i *AuctionIndexer) onAuctionCancelled(ctx context.Context, e blockchain.Au
 	log.Printf("[auction_indexer] AuctionCancelled auctionId=%d block=%d", e.AuctionID, e.BlockNumber)
 	if err := i.auctionService.UpdateStatus(i.contractAddress, e.AuctionID, model.AuctionStatusCancelled); err != nil {
 		log.Printf("[auction_indexer] AuctionCancelled update_failed auctionId=%d err=%v", e.AuctionID, err)
+	}
+}
+
+func (i *AuctionIndexer) onFeeCollected(ctx context.Context, e blockchain.FeeCollectedEvent) {
+	log.Printf("[auction_indexer] FeeCollected auctionId=%d recipient=%s amount=%s isETH=%v block=%d",
+		e.AuctionID, e.Recipient.Hex(), e.Amount.String(), e.IsETH, e.BlockNumber)
+	if err := i.auctionService.UpdateFeeCollected(i.contractAddress, e.AuctionID, e.Amount.String(), e.IsETH); err != nil {
+		log.Printf("[auction_indexer] FeeCollected update_failed auctionId=%d err=%v", e.AuctionID, err)
 	}
 }
 

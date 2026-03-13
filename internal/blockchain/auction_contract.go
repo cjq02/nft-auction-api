@@ -46,7 +46,7 @@ type boundContract struct {
 	abi abi.ABI
 }
 
-const iauctionABI = `[{"inputs":[{"internalType":"uint256","name":"auctionId","type":"uint256"}],"name":"getAuction","outputs":[{"components":[{"internalType":"address","name":"seller","type":"address"},{"internalType":"address","name":"nftContract","type":"address"},{"internalType":"uint256","name":"tokenId","type":"uint256"},{"internalType":"uint256","name":"startTime","type":"uint256"},{"internalType":"uint256","name":"endTime","type":"uint256"},{"internalType":"uint256","name":"minBid","type":"uint256"},{"internalType":"address","name":"paymentToken","type":"address"},{"internalType":"uint8","name":"status","type":"uint8"}],"internalType":"struct IAuction.AuctionInfo","name":"","type":"tuple"}],"stateMutability":"view","type":"function"},{"inputs":[{"internalType":"uint256","name":"auctionId","type":"uint256"}],"name":"getHighestBid","outputs":[{"components":[{"internalType":"address","name":"bidder","type":"address"},{"internalType":"uint256","name":"amount","type":"uint256"},{"internalType":"uint256","name":"timestamp","type":"uint256"},{"internalType":"bool","name":"isETH","type":"bool"}],"internalType":"struct IAuction.Bid","name":"","type":"tuple"}],"stateMutability":"view","type":"function"},{"anonymous":false,"inputs":[{"indexed":true,"internalType":"uint256","name":"auctionId","type":"uint256"},{"indexed":true,"internalType":"address","name":"seller","type":"address"},{"indexed":true,"internalType":"address","name":"nftContract","type":"address"},{"indexed":false,"internalType":"uint256","name":"tokenId","type":"uint256"},{"indexed":false,"internalType":"uint256","name":"startTime","type":"uint256"},{"indexed":false,"internalType":"uint256","name":"endTime","type":"uint256"},{"indexed":false,"internalType":"uint256","name":"minBid","type":"uint256"}],"name":"AuctionCreated","type":"event"}]`
+const iauctionABI = `[{"inputs":[{"internalType":"uint256","name":"auctionId","type":"uint256"}],"name":"getAuction","outputs":[{"components":[{"internalType":"address","name":"seller","type":"address"},{"internalType":"address","name":"nftContract","type":"address"},{"internalType":"uint256","name":"tokenId","type":"uint256"},{"internalType":"uint256","name":"startTime","type":"uint256"},{"internalType":"uint256","name":"endTime","type":"uint256"},{"internalType":"uint256","name":"minBid","type":"uint256"},{"internalType":"address","name":"paymentToken","type":"address"},{"internalType":"uint8","name":"status","type":"uint8"}],"internalType":"struct IAuction.AuctionInfo","name":"","type":"tuple"}],"stateMutability":"view","type":"function"},{"inputs":[{"internalType":"uint256","name":"auctionId","type":"uint256"}],"name":"getHighestBid","outputs":[{"components":[{"internalType":"address","name":"bidder","type":"address"},{"internalType":"uint256","name":"amount","type":"uint256"},{"internalType":"uint256","name":"timestamp","type":"uint256"},{"internalType":"bool","name":"isETH","type":"bool"}],"internalType":"struct IAuction.Bid","name":"","type":"tuple"}],"stateMutability":"view","type":"function"},{"inputs":[],"name":"feeRate","outputs":[{"internalType":"uint256","name":"","type":"uint256"}],"stateMutability":"view","type":"function"},{"inputs":[],"name":"feeRecipient","outputs":[{"internalType":"address","name":"","type":"address"}],"stateMutability":"view","type":"function"},{"anonymous":false,"inputs":[{"indexed":true,"internalType":"uint256","name":"auctionId","type":"uint256"},{"indexed":true,"internalType":"address","name":"seller","type":"address"},{"indexed":true,"internalType":"address","name":"nftContract","type":"address"},{"indexed":false,"internalType":"uint256","name":"tokenId","type":"uint256"},{"indexed":false,"internalType":"uint256","name":"startTime","type":"uint256"},{"indexed":false,"internalType":"uint256","name":"endTime","type":"uint256"},{"indexed":false,"internalType":"uint256","name":"minBid","type":"uint256"}],"name":"AuctionCreated","type":"event"}]`
 
 // auctionCreatedTopic is the keccak256 hash of the AuctionCreated event signature
 var auctionCreatedTopic = crypto.Keccak256Hash([]byte("AuctionCreated(uint256,address,address,uint256,uint256,uint256,uint256)"))
@@ -254,6 +254,82 @@ func (c *AuctionContract) GetHighestBid(ctx context.Context, auctionID uint64) (
 	}
 
 	return &bid, nil
+}
+
+// GetFeeRate 读取合约当前手续费率（万分之一，如 250 表示 2.5%）。
+func (c *AuctionContract) GetFeeRate(ctx context.Context) (*big.Int, error) {
+	if c == nil || c.client == nil {
+		return nil, nil
+	}
+	data, err := c.contract.abi.Pack("feeRate")
+	if err != nil {
+		return nil, err
+	}
+	result, err := c.client.CallContract(ctx, ethereum.CallMsg{
+		To:   &c.address,
+		Data: data,
+	}, nil)
+	if err != nil {
+		return nil, err
+	}
+	var rate big.Int
+	if err := c.contract.abi.UnpackIntoInterface(&rate, "feeRate", result); err != nil {
+		return nil, err
+	}
+	return &rate, nil
+}
+
+// GetFeeRecipient 读取合约手续费接收地址。
+func (c *AuctionContract) GetFeeRecipient(ctx context.Context) (common.Address, error) {
+	if c == nil || c.client == nil {
+		return common.Address{}, fmt.Errorf("blockchain not available")
+	}
+	data, err := c.contract.abi.Pack("feeRecipient")
+	if err != nil {
+		return common.Address{}, err
+	}
+	result, err := c.client.CallContract(ctx, ethereum.CallMsg{
+		To:   &c.address,
+		Data: data,
+	}, nil)
+	if err != nil {
+		return common.Address{}, err
+	}
+	var recipient common.Address
+	if err := c.contract.abi.UnpackIntoInterface(&recipient, "feeRecipient", result); err != nil {
+		return common.Address{}, err
+	}
+	return recipient, nil
+}
+
+// FeeRateBps 手续费率基数（万分之一）
+const FeeRateBps = 10000
+
+// ComputeFee 根据成交金额和合约手续费率计算手续费：fee = amount * feeRate / 10000。
+// 与合约中 calculateFee 的 V1 逻辑一致（不依赖 isETH/paymentToken）。
+func ComputeFee(amount, feeRate *big.Int) *big.Int {
+	if amount == nil || feeRate == nil || feeRate.Sign() == 0 {
+		return new(big.Int)
+	}
+	fee := new(big.Int).Mul(amount, feeRate)
+	return fee.Div(fee, big.NewInt(FeeRateBps))
+}
+
+// GetFeeForAuction 获取某场拍卖的手续费估算（当前费率 × 当前最高出价）。仅读链上，不依赖索引。
+// 若拍卖无出价或合约不可用，返回 nil, nil。
+func (c *AuctionContract) GetFeeForAuction(ctx context.Context, auctionID uint64) (*big.Int, error) {
+	if c == nil || c.client == nil {
+		return nil, nil
+	}
+	bid, err := c.GetHighestBid(ctx, auctionID)
+	if err != nil || bid == nil || bid.Amount == nil || bid.Amount.Sign() == 0 {
+		return nil, err
+	}
+	rate, err := c.GetFeeRate(ctx)
+	if err != nil || rate == nil {
+		return nil, err
+	}
+	return ComputeFee(bid.Amount, rate), nil
 }
 
 // GetMinBidEth 根据指定拍卖合约的 Chainlink 价格将 minBid（USD）换算为 ETH 展示字符串。
