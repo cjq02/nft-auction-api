@@ -48,6 +48,55 @@ func (s *AuctionService) Counts() (total, active, ended int64, err error) {
 	return total, active, ended, nil
 }
 
+// StatsForActive 返回平台统计数据：进行中拍卖数量、有出价的拍卖数量、最高价合计（wei）
+func (s *AuctionService) StatsForActive(contractFilter string) (totalAuctions, bidCount int64, totalHighestBidWei *big.Int, err error) {
+	contract := s.resolveContract(contractFilter)
+
+	query := s.db.Model(&model.AuctionIndex{}).Where("status = ?", model.AuctionStatusActive)
+	if contract != "" {
+		query = query.Where("auction_contract = ?", contract)
+	}
+
+	if err = query.Count(&totalAuctions).Error; err != nil {
+		return 0, 0, nil, errors.NewDatabaseError(err)
+	}
+
+	// 每个进行中拍卖的最高出价（MySQL 5.7 兼容：用 GROUP BY + MAX，不用窗口函数）
+	type HighestBidRow struct {
+		AuctionID uint64
+		Amount    string
+	}
+
+	var rows []HighestBidRow
+	q := s.db.Table("t_bid_index b").
+		Select("b.auction_id, MAX(b.amount) AS amount").
+		Joins("INNER JOIN t_auction_index a ON a.auction_id = b.auction_id AND a.auction_contract = b.auction_contract AND a.status = ?", model.AuctionStatusActive).
+		Group("b.auction_id")
+	if contract != "" {
+		q = q.Where("b.auction_contract = ?", contract)
+	}
+	if err = q.Scan(&rows).Error; err != nil {
+		return totalAuctions, 0, nil, errors.NewDatabaseError(err)
+	}
+
+	totalHighestBidWei = big.NewInt(0)
+	for _, r := range rows {
+		if r.Amount == "" {
+			continue
+		}
+		amt, ok := new(big.Int).SetString(r.Amount, 10)
+		if !ok {
+			continue
+		}
+		if amt.Sign() > 0 {
+			bidCount++
+			totalHighestBidWei.Add(totalHighestBidWei, amt)
+		}
+	}
+
+	return totalAuctions, bidCount, totalHighestBidWei, nil
+}
+
 func (s *AuctionService) List(page, limit int, status, contractFilter string) ([]model.AuctionIndex, int64, error) {
 	var items []model.AuctionIndex
 	var total int64

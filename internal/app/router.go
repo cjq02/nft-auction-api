@@ -76,6 +76,7 @@ func SetupRouter(
 		auctions := api.Group("/auctions")
 		{
 			auctions.GET("", auctionHandler.List)
+			auctions.GET("/stats", auctionHandler.Stats)
 			auctions.GET("/:id", auctionHandler.GetByID)
 			auctions.GET("/:id/bids", auctionHandler.ListBids)
 			// POST "" (sync via txHash) removed — replaced by WebSocket event listener

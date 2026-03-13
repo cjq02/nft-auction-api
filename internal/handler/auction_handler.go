@@ -90,6 +90,28 @@ func (h *AuctionHandler) List(c *gin.Context) {
 	})
 }
 
+// Stats 返回平台统计数据（首页使用）：进行中拍卖总数、有出价的拍卖数、最高价合计（wei）
+func (h *AuctionHandler) Stats(c *gin.Context) {
+	contract := c.Query("contract")
+
+	totalAuctions, bidCount, totalHighestBidWei, err := h.auctionService.StatsForActive(contract)
+	if err != nil {
+		response.HandleError(c, h.logger, err)
+		return
+	}
+
+	totalValue := "0"
+	if totalHighestBidWei != nil {
+		totalValue = totalHighestBidWei.String()
+	}
+
+	response.Success(c, gin.H{
+		"totalAuctions": totalAuctions,
+		"bidCount":      bidCount,
+		"totalValue":    totalValue,
+	})
+}
+
 func (h *AuctionHandler) GetByID(c *gin.Context) {
 	auctionID, err := strconv.ParseUint(c.Param("id"), 10, 64)
 	if err != nil {
