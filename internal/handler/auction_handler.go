@@ -79,11 +79,16 @@ func (h *AuctionHandler) List(c *gin.Context) {
 	// 列表接口中的最高出价主要用于前端展示；当未指定 contract 时，使用默认合约地址
 	highestByID, _ := h.bidService.GetHighestBidsForAuctions(auctionIDs, contract)
 
-	// 列表响应：附带 NFT 元数据与卖家名称
+	// 列表响应：附带 NFT 元数据、卖家名称与最高出价
 	var list []gin.H
 	for _, item := range items {
+		hb := highestByID[item.AuctionID]
+		// 若拍卖支付方式为 ERC20，则忽略 isEth=true 的最高出价（防止历史 ETH 拍卖残留干扰）
+		if hb != nil && item.PaymentToken != nil && *item.PaymentToken != "" && *item.PaymentToken != "0x0000000000000000000000000000000000000000" && hb.IsETH {
+			hb = nil
+		}
 		nft, _ := h.nftService.GetOrFetchMetadata(c.Request.Context(), item.NFTContract, item.TokenID)
-		resp := auctionToResponse(&item, highestByID[item.AuctionID], nft)
+		resp := auctionToResponse(&item, hb, nft)
 		if n := sellerNames[strings.ToLower(item.Seller)]; n != "" {
 			resp["sellerName"] = n
 		}
