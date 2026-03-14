@@ -340,3 +340,19 @@ func (c *AuctionContract) GetMinBidEth(ctx context.Context, auctionContractAddr 
 	}
 	return GetMinBidEth(ctx, c.client, auctionContractAddr, minBidUSD)
 }
+
+// GetEthPrice8 读取本合约配置的 ETH/USD 价格（Chainlink 8 位小数）。用于手续费折 USD。
+func (c *AuctionContract) GetEthPrice8(ctx context.Context) (*big.Int, error) {
+	if c == nil || c.client == nil {
+		return nil, fmt.Errorf("blockchain not available")
+	}
+	return GetEthPrice8(ctx, c.client, c.address.Hex())
+}
+
+// GetTokenPrice8 读取本合约配置的某代币 USD 价格（8 位小数）。用于手续费折 USD。
+func (c *AuctionContract) GetTokenPrice8(ctx context.Context, tokenAddr string) (*big.Int, error) {
+	if c == nil || c.client == nil {
+		return nil, fmt.Errorf("blockchain not available")
+	}
+	return GetTokenPrice8(ctx, c.client, c.address.Hex(), tokenAddr)
+}

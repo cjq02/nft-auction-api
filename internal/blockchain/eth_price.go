@@ -11,10 +11,11 @@ import (
 	"github.com/ethereum/go-ethereum/ethclient"
 )
 
-// ethPriceFeed() 与 latestRoundData() 的 4 字节 selector
+// ethPriceFeed()、tokenPriceFeeds(address)、latestRoundData() 的 4 字节 selector
 var (
-	selectorEthPriceFeed   = crypto.Keccak256([]byte("ethPriceFeed()"))[:4]
-	selectorLatestRoundData = crypto.Keccak256([]byte("latestRoundData()"))[:4]
+	selectorEthPriceFeed     = crypto.Keccak256([]byte("ethPriceFeed()"))[:4]
+	selectorTokenPriceFeeds  = crypto.Keccak256([]byte("tokenPriceFeeds(address)"))[:4]
+	selectorLatestRoundData  = crypto.Keccak256([]byte("latestRoundData()"))[:4]
 )
 
 // GetMinBidEth 根据拍卖合约的 Chainlink 价格将 minBid（USD，18 位小数）换算为 ETH 展示字符串。
@@ -79,6 +80,53 @@ func callLatestRoundData(ctx context.Context, client *ethclient.Client, feedAddr
 	}
 	answer := new(big.Int).SetBytes(result[32:64])
 	return answer, nil
+}
+
+// GetEthPrice8 读取拍卖合约配置的 ETH/USD 价格（8 位小数）。用于手续费折 USD。
+func GetEthPrice8(ctx context.Context, client *Client, auctionContractAddr string) (*big.Int, error) {
+	if client == nil || !client.IsAvailable() || auctionContractAddr == "" {
+		return nil, fmt.Errorf("invalid client or auction address")
+	}
+	addr := common.HexToAddress(auctionContractAddr)
+	feedAddr, err := callEthPriceFeed(ctx, client, addr)
+	if err != nil {
+		return nil, err
+	}
+	return callLatestRoundData(ctx, client.Client, feedAddr)
+}
+
+// callTokenPriceFeed 读取拍卖合约的 tokenPriceFeeds(token) 返回预言机地址。
+func callTokenPriceFeed(ctx context.Context, client *Client, auctionContract common.Address, tokenAddr string) (common.Address, error) {
+	if client == nil || !client.IsAvailable() || tokenAddr == "" {
+		return common.Address{}, fmt.Errorf("invalid client or token address")
+	}
+	token := common.HexToAddress(tokenAddr)
+	data := append(selectorTokenPriceFeeds, common.LeftPadBytes(token.Bytes(), 32)...)
+	msg := ethereum.CallMsg{
+		To:   &auctionContract,
+		Data: data,
+	}
+	result, err := client.CallContract(ctx, msg, nil)
+	if err != nil {
+		return common.Address{}, err
+	}
+	if len(result) < 32 {
+		return common.Address{}, fmt.Errorf("tokenPriceFeeds result too short")
+	}
+	return common.BytesToAddress(result[12:32]), nil
+}
+
+// GetTokenPrice8 读取拍卖合约配置的某代币 USD 价格（8 位小数）。用于手续费折 USD。
+func GetTokenPrice8(ctx context.Context, client *Client, auctionContractAddr, tokenAddr string) (*big.Int, error) {
+	if client == nil || !client.IsAvailable() || auctionContractAddr == "" || tokenAddr == "" {
+		return nil, fmt.Errorf("invalid client or address")
+	}
+	addr := common.HexToAddress(auctionContractAddr)
+	feedAddr, err := callTokenPriceFeed(ctx, client, addr, tokenAddr)
+	if err != nil {
+		return nil, err
+	}
+	return callLatestRoundData(ctx, client.Client, feedAddr)
 }
 
 func formatWeiToEth(wei *big.Int) string {

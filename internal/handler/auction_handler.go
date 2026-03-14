@@ -285,16 +285,22 @@ func (h *AuctionHandler) Backfill(c *gin.Context) {
 
 func auctionToResponse(a *model.AuctionIndex, highestBid *model.BidIndex, nft *model.NFTMetadata) gin.H {
 	resp := gin.H{
-		"auctionId":      a.AuctionID,
+		"auctionId":       a.AuctionID,
 		"auctionContract": a.AuctionContract,
-		"seller":         a.Seller,
-		"nftContract":  a.NFTContract,
-		"tokenId":      a.TokenID,
-		"startTime":    a.StartTime,
-		"endTime":      a.EndTime,
-		"minBid":       a.MinBid,
-		"paymentToken": a.PaymentToken,
-		"status":       a.Status,
+		"seller":          a.Seller,
+		"nftContract":     a.NFTContract,
+		"tokenId":         a.TokenID,
+		"startTime":       a.StartTime,
+		"endTime":         a.EndTime,
+		"minBid":          a.MinBid,
+		"paymentToken":    a.PaymentToken,
+		"status":          a.Status,
+	}
+	if a.FeeAmount != nil {
+		resp["feeAmount"] = a.FeeAmount
+	}
+	if a.FeeIsETH != nil {
+		resp["feeIsETH"] = a.FeeIsETH
 	}
 	if highestBid != nil {
 		resp["highestBid"] = gin.H{

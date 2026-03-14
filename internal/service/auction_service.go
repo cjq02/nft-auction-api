@@ -2,8 +2,11 @@ package service
 
 import (
 	"context"
+	"fmt"
 	"log"
 	"math/big"
+	"strconv"
+	"strings"
 
 	"nft-auction-api/internal/blockchain"
 	"nft-auction-api/internal/errors"
@@ -46,6 +49,239 @@ func (s *AuctionService) Counts() (total, active, ended int64, err error) {
 		return 0, 0, 0, errors.NewDatabaseError(err)
 	}
 	return total, active, ended, nil
+}
+
+// TokenFeeTotal 按代币地址聚合的手续费总额
+type TokenFeeTotal struct {
+	Token string `json:"token"`
+	Total string `json:"total"`
+}
+
+// TokenFeeTotalWithUsd 代币手续费合计及折合美元（用于手续费明细展示）
+type TokenFeeTotalWithUsd struct {
+	Token string `json:"token"`
+	Total string `json:"total"`
+	Usd   string `json:"usd"`
+}
+
+// FeeTotals 返回平台已收取的手续费总额（单位：原始最小单位字符串），
+// 分别统计 ETH 总额与按 payment_token 维度聚合的非 ETH 手续费。
+// 仅统计 status=Ended 且 fee_amount > 0 的拍卖。
+func (s *AuctionService) FeeTotals(contractFilter string) (ethTotal string, tokenTotals []TokenFeeTotal, err error) {
+	contract := s.resolveContract(contractFilter)
+
+	type Row struct {
+		Total string
+	}
+
+	var eth Row
+	qEth := s.db.Table("t_auction_index").
+		Select("COALESCE(SUM(CAST(fee_amount AS DECIMAL(65,0))), 0) AS total").
+		Where("status = ? AND fee_amount IS NOT NULL AND fee_amount <> '' AND fee_is_eth = 1", model.AuctionStatusEnded)
+	if contract != "" {
+		qEth = qEth.Where("auction_contract = ?", contract)
+	}
+	if err = qEth.Scan(&eth).Error; err != nil {
+		return "", nil, errors.NewDatabaseError(err)
+	}
+
+	type TokenRow struct {
+		Token string
+		Total string
+	}
+	var tokenRows []TokenRow
+	qToken := s.db.Table("t_auction_index").
+		Select("payment_token AS token, COALESCE(SUM(CAST(fee_amount AS DECIMAL(65,0))), 0) AS total").
+		Where("status = ? AND fee_amount IS NOT NULL AND fee_amount <> '' AND (fee_is_eth = 0 OR fee_is_eth IS NULL)", model.AuctionStatusEnded)
+	if contract != "" {
+		qToken = qToken.Where("auction_contract = ?", contract)
+	}
+	if err = qToken.Group("payment_token").Scan(&tokenRows).Error; err != nil {
+		return "", nil, errors.NewDatabaseError(err)
+	}
+
+	tokenTotals = make([]TokenFeeTotal, 0, len(tokenRows))
+	for _, r := range tokenRows {
+		if r.Token == "" || r.Total == "" || r.Total == "0" {
+			continue
+		}
+		tokenTotals = append(tokenTotals, TokenFeeTotal{
+			Token: r.Token,
+			Total: r.Total,
+		})
+	}
+
+	// 规范化为整数字符串，避免 MySQL 返回 "0.000000" 等导致前端解析异常；
+	// 若驱动返回科学计数法（如 8e+14），big.Int.SetString(10) 会失败，需用 float 解析后再转整数
+	intPart := eth.Total
+	if i := strings.Index(eth.Total, "."); i >= 0 {
+		intPart = eth.Total[:i]
+	}
+	ethTotalOut := "0"
+	if n, ok := new(big.Int).SetString(intPart, 10); ok && n.Sign() > 0 {
+		ethTotalOut = n.String()
+	} else if strings.ContainsAny(intPart, "eE") {
+		if f, err := strconv.ParseFloat(intPart, 64); err == nil && f > 0 {
+			// 仅当可精确还原为整数时使用（避免浮点误差）
+			if f <= 9e18 && f == float64(int64(f)) {
+				ethTotalOut = big.NewInt(int64(f)).String()
+			}
+		}
+	}
+	return ethTotalOut, tokenTotals, nil
+}
+
+// formatUsd8 将 8 位小数的美元整数格式化为 "12345.67"
+func formatUsd8(usd8 *big.Int) string {
+	if usd8 == nil || usd8.Sign() < 0 {
+		return "0.00"
+	}
+	oneE8 := big.NewInt(1e8)
+	intPart := new(big.Int).Div(usd8, oneE8)
+	rem := new(big.Int).Rem(usd8, oneE8)
+	centPart := new(big.Int).Mul(rem, big.NewInt(100))
+	centPart.Div(centPart, oneE8)
+	if centPart.Cmp(big.NewInt(100)) >= 0 {
+		centPart = big.NewInt(99)
+	}
+	return fmt.Sprintf("%s.%02d", intPart.String(), centPart.Int64())
+}
+
+// FeeTotalsWithUsd 返回手续费总额及每项折合美元（ETH 部分 + 各代币部分），用于手续费明细展示。
+func (s *AuctionService) FeeTotalsWithUsd(ctx context.Context, contractFilter string) (
+	ethTotal string,
+	ethUsd string,
+	tokenTotalsWithUsd []TokenFeeTotalWithUsd,
+	err error,
+) {
+	ethTotal, tokenTotals, err := s.FeeTotals(contractFilter)
+	if err != nil {
+		return "", "", nil, err
+	}
+	ethUsd = "0.00"
+	tokenTotalsWithUsd = make([]TokenFeeTotalWithUsd, 0, len(tokenTotals))
+	if s.auctionContract == nil {
+		for _, t := range tokenTotals {
+			tokenTotalsWithUsd = append(tokenTotalsWithUsd, TokenFeeTotalWithUsd{Token: t.Token, Total: t.Total, Usd: "0.00"})
+		}
+		return ethTotal, ethUsd, tokenTotalsWithUsd, nil
+	}
+	ethPrice8, err := s.auctionContract.GetEthPrice8(ctx)
+	if err != nil {
+		ethPrice8 = big.NewInt(0)
+	}
+	oneE18 := big.NewInt(1e18)
+	if ethTotal != "" && ethTotal != "0" {
+		ethWei, ok := new(big.Int).SetString(ethTotal, 10)
+		if ok && ethWei.Sign() > 0 && ethPrice8.Sign() > 0 {
+			ethUsd8 := new(big.Int).Mul(ethWei, ethPrice8)
+			ethUsd8.Div(ethUsd8, oneE18)
+			ethUsd = formatUsd8(ethUsd8)
+		}
+	}
+	for _, t := range tokenTotals {
+		usd := "0.00"
+		if t.Total != "" && t.Total != "0" {
+			price8, _ := s.auctionContract.GetTokenPrice8(ctx, t.Token)
+			if price8 != nil && price8.Sign() > 0 {
+				amt, ok := new(big.Int).SetString(t.Total, 10)
+				if ok && amt.Sign() > 0 {
+					tokenUsd8 := new(big.Int).Mul(amt, price8)
+					tokenUsd8.Div(tokenUsd8, oneE18)
+					usd = formatUsd8(tokenUsd8)
+				}
+			}
+		}
+		tokenTotalsWithUsd = append(tokenTotalsWithUsd, TokenFeeTotalWithUsd{Token: t.Token, Total: t.Total, Usd: usd})
+	}
+	return ethTotal, ethUsd, tokenTotalsWithUsd, nil
+}
+
+// ComputeFeeTotalUsd 将 ETH + 各代币手续费折成美元合计（使用链上当前价格）。无法读价格时返回 "0.00"。
+func (s *AuctionService) ComputeFeeTotalUsd(ctx context.Context, contractFilter string) (string, error) {
+	ethTotal, tokenTotals, err := s.FeeTotals(contractFilter)
+	if err != nil {
+		return "", err
+	}
+	if s.auctionContract == nil {
+		return "0.00", nil
+	}
+
+	ethPrice8, err := s.auctionContract.GetEthPrice8(ctx)
+	if err != nil {
+		ethPrice8 = big.NewInt(0)
+	}
+
+	oneE18 := big.NewInt(1e18)
+	oneE8 := big.NewInt(1e8)
+	totalUsd8 := new(big.Int)
+
+	if ethTotal != "" && ethTotal != "0" {
+		ethWei, ok := new(big.Int).SetString(ethTotal, 10)
+		if ok && ethWei.Sign() > 0 {
+			// ethUsd8 = ethWei * ethPrice8 / 1e18（price8 为 8 位小数，结果即 USD 的 8 位小数）
+			ethUsd8 := new(big.Int).Mul(ethWei, ethPrice8)
+			ethUsd8.Div(ethUsd8, oneE18)
+			totalUsd8.Add(totalUsd8, ethUsd8)
+		}
+	}
+
+	for _, t := range tokenTotals {
+		if t.Total == "" || t.Total == "0" {
+			continue
+		}
+		price8, err := s.auctionContract.GetTokenPrice8(ctx, t.Token)
+		if err != nil || price8 == nil || price8.Sign() <= 0 {
+			continue
+		}
+		amt, ok := new(big.Int).SetString(t.Total, 10)
+		if !ok || amt.Sign() <= 0 {
+			continue
+		}
+		// tokenUsd8 = amt * price8 / 1e18
+		tokenUsd8 := new(big.Int).Mul(amt, price8)
+		tokenUsd8.Div(tokenUsd8, oneE18)
+		totalUsd8.Add(totalUsd8, tokenUsd8)
+	}
+
+	// 格式化为 "12345.67"（totalUsd8 为 8 位小数）
+	intPart := new(big.Int).Div(totalUsd8, oneE8)
+	rem := new(big.Int).Rem(totalUsd8, oneE8)
+	centPart := new(big.Int).Mul(rem, big.NewInt(100))
+	centPart.Div(centPart, oneE8)
+	if centPart.Cmp(big.NewInt(100)) >= 0 {
+		centPart = big.NewInt(99)
+	}
+	return fmt.Sprintf("%s.%02d", intPart.String(), centPart.Int64()), nil
+}
+
+// ComputeFeeTotalEthEquivalent 将平台手续费美元总额按当前链上 ETH 价格换算成 ETH 数量（用于展示「折合 x.xx ETH」）。
+func (s *AuctionService) ComputeFeeTotalEthEquivalent(ctx context.Context, feeTotalUsd string) (string, error) {
+	if feeTotalUsd == "" || feeTotalUsd == "0" || feeTotalUsd == "0.00" {
+		return "0", nil
+	}
+	if s.auctionContract == nil {
+		return "0", nil
+	}
+	ethPrice8, err := s.auctionContract.GetEthPrice8(ctx)
+	if err != nil || ethPrice8 == nil || ethPrice8.Sign() <= 0 {
+		return "0", nil
+	}
+	usd, err := strconv.ParseFloat(feeTotalUsd, 64)
+	if err != nil || usd <= 0 {
+		return "0", nil
+	}
+	// 用 big.Float 避免 ethPrice8 超过 int64 时溢出；ethEquivalent = usd / (ethPrice8/1e8)
+	usdF := big.NewFloat(usd)
+	price8F := new(big.Float).SetInt(ethPrice8)
+	oneE8F := big.NewFloat(1e8)
+	priceUsdF := new(big.Float).Quo(price8F, oneE8F)
+	if priceUsdF.Sign() <= 0 {
+		return "0", nil
+	}
+	ethEqF := new(big.Float).Quo(usdF, priceUsdF)
+	ethEq, _ := ethEqF.Float64()
+	return fmt.Sprintf("%.6f", ethEq), nil
 }
 
 // StatsForActive 返回平台统计数据：进行中拍卖数量、有出价的拍卖数量、最高价合计（wei）

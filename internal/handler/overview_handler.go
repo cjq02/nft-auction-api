@@ -44,17 +44,37 @@ func (h *OverviewHandler) GetOverview(c *gin.Context) {
 		return
 	}
 
-		data := gin.H{
+	ethFee, feeTotalEthUsd, tokenFeesWithUsd, err := h.auctionService.FeeTotalsWithUsd(ctx, "")
+	if err != nil {
+		response.HandleError(c, h.logger, err)
+		return
+	}
+
+	feeTotalUsd, _ := h.auctionService.ComputeFeeTotalUsd(ctx, "")
+	if feeTotalUsd == "" {
+		feeTotalUsd = "0.00"
+	}
+	feeTotalEthEquivalent, _ := h.auctionService.ComputeFeeTotalEthEquivalent(ctx, feeTotalUsd)
+	if feeTotalEthEquivalent == "" {
+		feeTotalEthEquivalent = "0"
+	}
+
+	data := gin.H{
 		"auction": gin.H{
-			"total":  total,
-			"active": active,
-			"ended":  ended,
+			"total":                  total,
+			"active":                 active,
+			"ended":                  ended,
+			"feeTotalEth":            ethFee,
+			"feeTotalEthUsd":         feeTotalEthUsd,
+			"feeByToken":             tokenFeesWithUsd,
+			"feeTotalUsd":            feeTotalUsd,
+			"feeTotalEthEquivalent":  feeTotalEthEquivalent,
 		},
 		"nft": gin.H{
-			"totalSupply":    nil,
-			"burnedCount":    nil,
-			"currentSupply":  nil,
-			"nextTokenId":    nil,
+			"totalSupply":   nil,
+			"burnedCount":   nil,
+			"currentSupply": nil,
+			"nextTokenId":   nil,
 		},
 	}
 
