@@ -302,6 +302,9 @@ func auctionToResponse(a *model.AuctionIndex, highestBid *model.BidIndex, nft *m
 	if a.FeeIsETH != nil {
 		resp["feeIsETH"] = a.FeeIsETH
 	}
+	if a.FeeRateBps != nil {
+		resp["feeRateBps"] = *a.FeeRateBps
+	}
 	if highestBid != nil {
 		resp["highestBid"] = gin.H{
 			"bidder":    highestBid.Bidder,

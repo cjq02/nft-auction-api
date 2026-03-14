@@ -475,9 +475,12 @@ func (s *AuctionService) UpdateStatus(contractAddress string, auctionID uint64, 
 }
 
 // UpdateFeeCollected 更新某场拍卖的手续费（由 FeeCollected 事件触发）
-func (s *AuctionService) UpdateFeeCollected(contractAddress string, auctionID uint64, feeAmount string, feeIsETH bool) error {
+func (s *AuctionService) UpdateFeeCollected(contractAddress string, auctionID uint64, feeAmount string, feeIsETH bool, feeRateBps uint64) error {
 	contractAddress = s.resolveContract(contractAddress)
 	updates := map[string]interface{}{"fee_amount": feeAmount, "fee_is_eth": feeIsETH}
+	if feeRateBps > 0 {
+		updates["fee_rate_bps"] = feeRateBps
+	}
 	return s.db.Model(&model.AuctionIndex{}).Where("auction_id = ? AND auction_contract = ?", auctionID, contractAddress).Updates(updates).Error
 }
 

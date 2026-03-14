@@ -57,6 +57,7 @@ type FeeCollectedEvent struct {
 	Recipient   common.Address
 	Amount      *big.Int
 	IsETH       bool
+	FeeRateBps  uint64   // 实际使用的费率（基点），V2 动态手续费后新增
 	BlockNumber uint64
 	TxHash      string
 }
@@ -81,8 +82,8 @@ var (
 	auctionEndedTopic = crypto.Keccak256Hash([]byte("AuctionEnded(uint256,address,uint256)"))
 	// AuctionCancelled(uint256 indexed)
 	auctionCancelledTopic = crypto.Keccak256Hash([]byte("AuctionCancelled(uint256)"))
-	// FeeCollected(uint256 indexed auctionId, address indexed recipient, uint256 amount, bool isETH)
-	feeCollectedTopic = crypto.Keccak256Hash([]byte("FeeCollected(uint256,address,uint256,bool)"))
+	// FeeCollected(uint256 indexed, address indexed, uint256 amount, bool isETH, uint256 feeRateBps)
+	feeCollectedTopic = crypto.Keccak256Hash([]byte("FeeCollected(uint256,address,uint256,bool,uint256)"))
 )
 
 // -------- EventListener --------
@@ -373,7 +374,8 @@ func (l *EventListener) handleAuctionCancelled(ctx context.Context, lg types.Log
 	})
 }
 
-// FeeCollected: topics[1]=auctionId, topics[2]=recipient; data=amount(32), isETH(32)
+// FeeCollected: topics[1]=auctionId, topics[2]=recipient; data=amount(32), isETH(32), feeRateBps(32)
+// 旧合约可能只有 64 字节 data，无 feeRateBps，此时 FeeRateBps 填 0
 func (l *EventListener) handleFeeCollected(ctx context.Context, lg types.Log) {
 	if len(lg.Topics) < 3 || len(lg.Data) < 64 {
 		log.Printf("[event_listener] FeeCollected malformed tx=%s", lg.TxHash.Hex())
@@ -382,12 +384,17 @@ func (l *EventListener) handleFeeCollected(ctx context.Context, lg types.Log) {
 	if l.handlers.OnFeeCollected == nil {
 		return
 	}
-	isETH := len(lg.Data) >= 64 && lg.Data[63] != 0
+	isETH := lg.Data[63] != 0
+	var feeRateBps uint64
+	if len(lg.Data) >= 96 {
+		feeRateBps = new(big.Int).SetBytes(lg.Data[64:96]).Uint64()
+	}
 	l.handlers.OnFeeCollected(ctx, FeeCollectedEvent{
 		AuctionID:   new(big.Int).SetBytes(lg.Topics[1].Bytes()).Uint64(),
 		Recipient:   common.BytesToAddress(lg.Topics[2].Bytes()),
 		Amount:      new(big.Int).SetBytes(lg.Data[0:32]),
 		IsETH:       isETH,
+		FeeRateBps:  feeRateBps,
 		BlockNumber: lg.BlockNumber,
 		TxHash:      lg.TxHash.Hex(),
 	})

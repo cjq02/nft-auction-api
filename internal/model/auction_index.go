@@ -26,6 +26,7 @@ type AuctionIndex struct {
 	Status          AuctionStatus `json:"status" gorm:"size:20;not null;default:Active"`
 	FeeAmount       *string       `json:"feeAmount,omitempty" gorm:"column:fee_amount;size:78"`   // 该场拍卖收取的手续费（wei/最小单位），仅 Ended 且有成交时有值
 	FeeIsETH        *bool         `json:"feeIsETH,omitempty" gorm:"column:fee_is_eth"`            // 手续费是否为 ETH
+	FeeRateBps      *uint64       `json:"feeRateBps,omitempty" gorm:"column:fee_rate_bps"`      // 实际使用的费率（基点），便于展示「当时怎么算的」
 	CreatedAt       time.Time     `json:"createdAt"`
 	UpdatedAt       time.Time     `json:"updatedAt"`
 }

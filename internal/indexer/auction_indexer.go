@@ -136,9 +136,9 @@ func (i *AuctionIndexer) onAuctionCancelled(ctx context.Context, e blockchain.Au
 }
 
 func (i *AuctionIndexer) onFeeCollected(ctx context.Context, e blockchain.FeeCollectedEvent) {
-	log.Printf("[auction_indexer] FeeCollected auctionId=%d recipient=%s amount=%s isETH=%v block=%d",
-		e.AuctionID, e.Recipient.Hex(), e.Amount.String(), e.IsETH, e.BlockNumber)
-	if err := i.auctionService.UpdateFeeCollected(i.contractAddress, e.AuctionID, e.Amount.String(), e.IsETH); err != nil {
+	log.Printf("[auction_indexer] FeeCollected auctionId=%d recipient=%s amount=%s isETH=%v feeRateBps=%d block=%d",
+		e.AuctionID, e.Recipient.Hex(), e.Amount.String(), e.IsETH, e.FeeRateBps, e.BlockNumber)
+	if err := i.auctionService.UpdateFeeCollected(i.contractAddress, e.AuctionID, e.Amount.String(), e.IsETH, e.FeeRateBps); err != nil {
 		log.Printf("[auction_indexer] FeeCollected update_failed auctionId=%d err=%v", e.AuctionID, err)
 	}
 }
