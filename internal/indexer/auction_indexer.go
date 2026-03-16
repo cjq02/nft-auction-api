@@ -81,13 +81,26 @@ func (i *AuctionIndexer) loadCheckpoint() uint64 {
 	return state.LastIndexedBlock + 1
 }
 
+// saveCheckpoint 仅向前推进 checkpoint，避免乱序日志导致 checkpoint 回退进而漏事件
 func (i *AuctionIndexer) saveCheckpoint(block uint64) {
-	state := model.IndexerState{ContractAddress: i.contractAddress, LastIndexedBlock: block}
-	if err := i.db.Clauses(clause.OnConflict{
-		Columns:   []clause.Column{{Name: "contract_address"}},
-		DoUpdates: clause.AssignmentColumns([]string{"last_indexed_block"}),
-	}).Create(&state).Error; err != nil {
-		log.Printf("[auction_indexer] saveCheckpoint failed block=%d err=%v", block, err)
+	res := i.db.Model(&model.IndexerState{}).
+		Where("contract_address = ? AND (last_indexed_block < ? OR last_indexed_block = 0)", i.contractAddress, block).
+		Update("last_indexed_block", block)
+	if res.Error != nil {
+		log.Printf("[auction_indexer] saveCheckpoint failed block=%d err=%v", block, res.Error)
+		return
+	}
+	if res.RowsAffected > 0 {
+		return
+	}
+	// RowsAffected == 0：要么已有更大 checkpoint，要么记录不存在；确保首次有记录
+	var state model.IndexerState
+	if err := i.db.Where("contract_address = ?", i.contractAddress).First(&state).Error; err != nil {
+		state = model.IndexerState{ContractAddress: i.contractAddress, LastIndexedBlock: block}
+		_ = i.db.Clauses(clause.OnConflict{
+			Columns:   []clause.Column{{Name: "contract_address"}},
+			DoUpdates: clause.AssignmentColumns([]string{"last_indexed_block"}),
+		}).Create(&state).Error
 	}
 }
 
